@@ -6,13 +6,11 @@ from dotenv import load_dotenv
 import sqlite3
 import os
 
-
 # --------------------------------
 # 1. Load environment variables
 # --------------------------------
 
 load_dotenv()
-
 
 # --------------------------------
 # 2. Create OpenAI client
@@ -22,13 +20,40 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-
 # --------------------------------
 # 3. Create FastAPI application
 # --------------------------------
 
 app = FastAPI()
 
+# --------------------------------
+# Chatbot prompt
+# --------------------------------
+
+SYSTEM_PROMPT = """
+ROLE:
+You are a helpful AI assistant.
+
+GOAL:
+Help the user understand topics clearly and accurately.
+
+STYLE:
+- Use simple and clear language.
+- Be concise unless the user asks for more detail.
+- Use examples when they improve understanding.
+- Use bullet points or headings when useful.
+
+PROGRAMMING QUESTIONS:
+- Explain the concept in beginner-friendly language.
+- Provide a small code example when appropriate.
+- Explain what the code is doing.
+
+RULES:
+- Use the conversation history when relevant.
+- Do not invent information.
+- If you are uncertain, say so clearly.
+- Answer the user's actual question without unnecessary information.
+"""
 
 # --------------------------------
 # 4. Database file
@@ -36,41 +61,29 @@ app = FastAPI()
 
 DATABASE_NAME = "chatbot.db"
 
-
 # --------------------------------
 # 5. Create database table
 # --------------------------------
 
 def initialize_database():
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             conversation_id TEXT NOT NULL,
-
             role TEXT NOT NULL,
-
             content TEXT NOT NULL,
-
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
         )
     """)
 
     connection.commit()
-
     connection.close()
-
 
 # Run when application starts
 initialize_database()
-
 
 # --------------------------------
 # 6. Request models
@@ -84,7 +97,6 @@ class ChatRequest(BaseModel):
 class ClearRequest(BaseModel):
     conversation_id: str
 
-
 # --------------------------------
 # 7. Save message to database
 # --------------------------------
@@ -94,9 +106,7 @@ def save_message(
     role: str,
     content: str
 ):
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -116,9 +126,7 @@ def save_message(
     )
 
     connection.commit()
-
     connection.close()
-
 
 # --------------------------------
 # 8. Get conversation history
@@ -127,9 +135,7 @@ def save_message(
 def get_conversation_history(
     conversation_id: str
 ):
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -143,28 +149,20 @@ def get_conversation_history(
     )
 
     rows = cursor.fetchall()
-
     connection.close()
-
 
     conversation_history = []
 
-
     for row in rows:
-
         role = row[0]
-
         content = row[1]
-
 
         conversation_history.append({
             "role": role,
             "content": content
         })
 
-
     return conversation_history
-
 
 # --------------------------------
 # 9. Serve frontend
@@ -172,9 +170,7 @@ def get_conversation_history(
 
 @app.get("/")
 def home():
-
     return FileResponse("index.html")
-
 
 # --------------------------------
 # 10. Chat endpoint
@@ -185,14 +181,10 @@ def chat(request: ChatRequest):
 
     conversation_id = request.conversation_id
 
-
     # Get previous messages from SQLite
-    conversation_history = (
-        get_conversation_history(
-            conversation_id
-        )
+    conversation_history = get_conversation_history(
+        conversation_id
     )
-
 
     # Add current user message
     conversation_history.append({
@@ -200,61 +192,41 @@ def chat(request: ChatRequest):
         "content": request.message
     })
 
-
     print("\nConversation ID:")
     print(conversation_id)
-
 
     print("\nHistory being sent to AI:")
     print(conversation_history)
 
-
     # Send conversation to LLM
     response = client.responses.create(
-
-        model="gpt-6-luna",
-
-        instructions="""
-        You are a helpful AI assistant.
-        Give simple, clear and friendly answers.
-        """,
-
+        model="gpt-4.1-mini",
+        instructions=SYSTEM_PROMPT,
         input=conversation_history
     )
-
 
     # Extract AI response
     ai_reply = response.output_text
 
-
-    # Save user's message permanently
+    # Save user's message
     save_message(
         conversation_id,
         "user",
         request.message
     )
 
-
-    # Save AI response permanently
+    # Save AI response
     save_message(
         conversation_id,
         "assistant",
         ai_reply
     )
 
-
     return {
-
-        "conversation_id":
-            conversation_id,
-
-        "user_message":
-            request.message,
-
-        "bot_response":
-            ai_reply
+        "conversation_id": conversation_id,
+        "user_message": request.message,
+        "bot_response": ai_reply
     }
-
 
 # --------------------------------
 # 11. Clear one conversation
@@ -269,7 +241,6 @@ def clear_chat(request: ClearRequest):
 
     cursor = connection.cursor()
 
-
     cursor.execute(
         """
         DELETE FROM messages
@@ -278,19 +249,14 @@ def clear_chat(request: ClearRequest):
         (request.conversation_id,)
     )
 
-
     connection.commit()
-
     connection.close()
-
 
     print(
         f"\nConversation "
         f"{request.conversation_id} cleared!"
     )
 
-
     return {
-        "message":
-        "Conversation cleared successfully"
+        "message": "Conversation cleared successfully"
     }

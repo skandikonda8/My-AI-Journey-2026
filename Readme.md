@@ -236,15 +236,23 @@ The local SQLite database is excluded from GitHub because it may contain convers
 
 ## Milestone 8 — Prompt Engineering
 
-Learn and implement:
+## Milestone 8 — Prompt Engineering
 
-- System instructions
+Improved control over the chatbot's behavior using structured system prompts.
+
+### Learned
+
+- System prompts
+- User prompts
 - Role prompting
+- Prompt structure
 - Zero-shot prompting
 - Few-shot prompting
 - Prompt constraints
 - Context
-- Prompt templates
+- Hallucination reduction
+- Prompt engineering vs model training
+- Introduction to prompt injection
 
 ## Milestone 9 — Streaming Responses
 
