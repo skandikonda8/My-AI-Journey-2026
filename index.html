@@ -43,6 +43,7 @@
             text-align: left;
             margin: 10px;
             color: green;
+            white-space: pre-wrap;
         }
 
         .input-container {
@@ -103,110 +104,246 @@
     </div>
 
     <script>
-        let conversationId = crypto.randomUUID();
 
+
+        // --------------------------------
+        // CREATE CONVERSATION ID
+        // --------------------------------
+        
+        let conversationId = crypto.randomUUID();
+        
+        
         // --------------------------------
         // SEND MESSAGE
         // --------------------------------
-
+        
         async function sendMessage() {
-
+        
+        
             const input =
                 document.getElementById("message-input");
-
+        
+        
             const message =
                 input.value;
-
+        
+        
             if (message.trim() === "") {
                 return;
             }
-
+        
+        
             const chatBox =
                 document.getElementById("chat-box");
-
-            chatBox.innerHTML += `
-                <div class="user-message">
-                    You: ${message}
-                </div>
-            `;
-
+        
+        
+            // --------------------------------
+            // Show user message
+            // --------------------------------
+        
+            const userMessage =
+                document.createElement("div");
+        
+        
+            userMessage.className =
+                "user-message";
+        
+        
+            userMessage.textContent =
+                "You: " + message;
+        
+        
+            chatBox.appendChild(userMessage);
+        
+        
+            // Clear input
             input.value = "";
-
-            const response = await fetch("/chat", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    conversation_id: conversationId,
-                    message: message
-                })
-            });
-
-            const data =
-                await response.json();
-
-            chatBox.innerHTML += `
-                <div class="bot-message">
-                    AI: ${data.bot_response}
-                </div>
-            `;
-
-            chatBox.scrollTop =
-                chatBox.scrollHeight;
+        
+        
+            // --------------------------------
+            // Create empty AI message
+            // --------------------------------
+        
+            const botMessage =
+                document.createElement("div");
+        
+        
+            botMessage.className =
+                "bot-message";
+        
+        
+            botMessage.textContent =
+                "AI: ";
+        
+        
+            chatBox.appendChild(botMessage);
+        
+        
+            // --------------------------------
+            // Send POST request
+            // --------------------------------
+        
+            const response =
+                await fetch("/chat", {
+        
+                    method: "POST",
+        
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+        
+                    body: JSON.stringify({
+        
+                        conversation_id:
+                            conversationId,
+        
+                        message:
+                            message
+        
+                    })
+        
+                });
+        
+        
+            // --------------------------------
+            // Check for server error
+            // --------------------------------
+        
+            if (!response.ok) {
+        
+                botMessage.textContent +=
+                    "Something went wrong.";
+        
+                return;
+            }
+        
+        
+            // --------------------------------
+            // Get streaming reader
+            // --------------------------------
+        
+            const reader =
+                response.body.getReader();
+        
+        
+            // Converts bytes into text
+            const decoder =
+                new TextDecoder();
+        
+        
+            // --------------------------------
+            // Read stream continuously
+            // --------------------------------
+        
+            while (true) {
+        
+        
+                const { done, value } =
+                    await reader.read();
+        
+        
+                if (done) {
+        
+                    break;
+        
+                }
+        
+        
+                // Convert incoming bytes
+                // into readable text
+        
+                const chunk =
+                    decoder.decode(
+                        value,
+                        { stream: true }
+                    );
+        
+        
+                // Add chunk to AI message
+        
+                botMessage.textContent +=
+                    chunk;
+        
+        
+                // Scroll down automatically
+        
+                chatBox.scrollTop =
+                    chatBox.scrollHeight;
+        
+            }
+        
         }
-
+        
+        
+        
         // --------------------------------
         // CLEAR CHAT
         // --------------------------------
-
+        
         async function clearChat() {
-
-            conversationId = crypto.randomUUID();
-
-            const response = await fetch("/clear", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    conversation_id: conversationId
-                })
-            });
-
-            const data =
-                await response.json();
-
-            console.log(data);
-
+        
+        
+            const response =
+                await fetch("/clear", {
+        
+                    method: "POST",
+        
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+        
+                    body: JSON.stringify({
+        
+                        conversation_id:
+                            conversationId
+        
+                    })
+        
+                });
+        
+        
+            await response.json();
+        
+        
+            // New conversation ID
+            conversationId =
+                crypto.randomUUID();
+        
+        
             const chatBox =
-                document.getElementById("chat-box");
-
-            chatBox.innerHTML = `
-                <div class="bot-message">
+                document.getElementById(
+                    "chat-box"
+                );
+        
+        
+            chatBox.innerHTML =
+                `<div class="bot-message">
                     AI: New conversation started. Ask me anything.
-                </div>
-            `;
+                </div>`;
+        
         }
-
+        
+        
+        
         // --------------------------------
         // PRESS ENTER TO SEND
         // --------------------------------
-
+        
         document
             .getElementById("message-input")
             .addEventListener(
                 "keypress",
-                function (event) {
-
+                function(event) {
+        
                     if (event.key === "Enter") {
+        
                         sendMessage();
+        
                     }
-
+        
                 }
             );
-    </script>
-
-</body>
-
-</html>
+        
+        
+        </script>

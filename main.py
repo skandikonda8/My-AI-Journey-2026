@@ -1,16 +1,18 @@
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 import sqlite3
 import os
 
+
 # --------------------------------
 # 1. Load environment variables
 # --------------------------------
 
 load_dotenv()
+
 
 # --------------------------------
 # 2. Create OpenAI client
@@ -20,14 +22,23 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
+
 # --------------------------------
 # 3. Create FastAPI application
 # --------------------------------
 
 app = FastAPI()
 
+
 # --------------------------------
-# Chatbot prompt
+# 4. Database
+# --------------------------------
+
+DATABASE_NAME = "chatbot.db"
+
+
+# --------------------------------
+# 5. System Prompt
 # --------------------------------
 
 SYSTEM_PROMPT = """
@@ -38,55 +49,62 @@ GOAL:
 Help the user understand topics clearly and accurately.
 
 STYLE:
-- Use simple and clear language.
-- Be concise unless the user asks for more detail.
-- Use examples when they improve understanding.
-- Use bullet points or headings when useful.
+Use simple, clean plain text.
+Do not use Markdown formatting.
+Do not use #, ##, ###, **, backticks, or Markdown bullet syntax.
+Use normal sentences, short paragraphs, and simple numbering when needed.
+Keep answers concise unless the user asks for more detail.
+Use examples when they improve understanding.
 
 PROGRAMMING QUESTIONS:
-- Explain the concept in beginner-friendly language.
-- Provide a small code example when appropriate.
-- Explain what the code is doing.
+Explain the concept in beginner-friendly language.
+Provide a small code example when appropriate.
+Explain what the code is doing.
 
 RULES:
-- Use the conversation history when relevant.
-- Do not invent information.
-- If you are uncertain, say so clearly.
-- Answer the user's actual question without unnecessary information.
+Use conversation history when relevant.
+Do not invent information.
+If you are uncertain, say so clearly.
+Answer the user's actual question without unnecessary information.
 """
 
-# --------------------------------
-# 4. Database file
-# --------------------------------
-
-DATABASE_NAME = "chatbot.db"
 
 # --------------------------------
-# 5. Create database table
+# 6. Initialize database
 # --------------------------------
 
 def initialize_database():
+
     connection = sqlite3.connect(DATABASE_NAME)
+
     cursor = connection.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
+
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+
             conversation_id TEXT NOT NULL,
+
             role TEXT NOT NULL,
+
             content TEXT NOT NULL,
+
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
         )
     """)
 
     connection.commit()
+
     connection.close()
 
-# Run when application starts
+
 initialize_database()
 
+
 # --------------------------------
-# 6. Request models
+# 7. Request models
 # --------------------------------
 
 class ChatRequest(BaseModel):
@@ -97,8 +115,9 @@ class ChatRequest(BaseModel):
 class ClearRequest(BaseModel):
     conversation_id: str
 
+
 # --------------------------------
-# 7. Save message to database
+# 8. Save message
 # --------------------------------
 
 def save_message(
@@ -106,7 +125,9 @@ def save_message(
     role: str,
     content: str
 ):
+
     connection = sqlite3.connect(DATABASE_NAME)
+
     cursor = connection.cursor()
 
     cursor.execute(
@@ -126,16 +147,20 @@ def save_message(
     )
 
     connection.commit()
+
     connection.close()
 
+
 # --------------------------------
-# 8. Get conversation history
+# 9. Get conversation history
 # --------------------------------
 
 def get_conversation_history(
     conversation_id: str
 ):
+
     connection = sqlite3.connect(DATABASE_NAME)
+
     cursor = connection.cursor()
 
     cursor.execute(
@@ -149,31 +174,36 @@ def get_conversation_history(
     )
 
     rows = cursor.fetchall()
+
     connection.close()
+
 
     conversation_history = []
 
+
     for row in rows:
-        role = row[0]
-        content = row[1]
 
         conversation_history.append({
-            "role": role,
-            "content": content
+            "role": row[0],
+            "content": row[1]
         })
+
 
     return conversation_history
 
+
 # --------------------------------
-# 9. Serve frontend
+# 10. Serve frontend
 # --------------------------------
 
 @app.get("/")
 def home():
+
     return FileResponse("index.html")
 
+
 # --------------------------------
-# 10. Chat endpoint
+# 11. Streaming Chat Endpoint
 # --------------------------------
 
 @app.post("/chat")
@@ -181,10 +211,14 @@ def chat(request: ChatRequest):
 
     conversation_id = request.conversation_id
 
-    # Get previous messages from SQLite
-    conversation_history = get_conversation_history(
-        conversation_id
+
+    # Get previous conversation
+    conversation_history = (
+        get_conversation_history(
+            conversation_id
+        )
     )
+
 
     # Add current user message
     conversation_history.append({
@@ -192,44 +226,96 @@ def chat(request: ChatRequest):
         "content": request.message
     })
 
-    print("\nConversation ID:")
-    print(conversation_id)
 
-    print("\nHistory being sent to AI:")
-    print(conversation_history)
-
-    # Send conversation to LLM
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        instructions=SYSTEM_PROMPT,
-        input=conversation_history
-    )
-
-    # Extract AI response
-    ai_reply = response.output_text
-
-    # Save user's message
+    # Save user message
     save_message(
         conversation_id,
         "user",
         request.message
     )
 
-    # Save AI response
-    save_message(
-        conversation_id,
-        "assistant",
-        ai_reply
+
+    print("\nConversation ID:")
+    print(conversation_id)
+
+
+    print("\nHistory being sent to AI:")
+    print(conversation_history)
+
+
+    # --------------------------------
+    # Generator for streaming
+    # --------------------------------
+
+    def generate_response():
+
+        full_response = ""
+
+
+        try:
+
+            stream = client.responses.create(
+
+                model="gpt-6-luna",
+
+                instructions=SYSTEM_PROMPT,
+
+                input=conversation_history,
+
+                stream=True
+
+            )
+
+
+            for event in stream:
+
+
+                # OpenAI sends small pieces of text
+                if event.type == "response.output_text.delta":
+
+                    chunk = event.delta
+
+
+                    # Build complete answer
+                    full_response += chunk
+
+
+                    # Send chunk immediately to browser
+                    yield chunk
+
+
+            # After streaming finishes,
+            # save complete AI answer
+            if full_response.strip():
+
+                save_message(
+                    conversation_id,
+                    "assistant",
+                    full_response
+                )
+
+
+                print("\nComplete AI Response:")
+                print(full_response)
+
+
+        except Exception as error:
+
+            print("\nStreaming Error:")
+            print(error)
+
+            yield "\nSorry, something went wrong while generating the response."
+
+
+    # Return streaming response instead of JSON
+    return StreamingResponse(
+        generate_response(),
+        media_type="text/plain"
     )
 
-    return {
-        "conversation_id": conversation_id,
-        "user_message": request.message,
-        "bot_response": ai_reply
-    }
 
 # --------------------------------
-# 11. Clear one conversation
+# 12. Clear conversation
 # --------------------------------
 
 @app.post("/clear")
@@ -241,6 +327,7 @@ def clear_chat(request: ClearRequest):
 
     cursor = connection.cursor()
 
+
     cursor.execute(
         """
         DELETE FROM messages
@@ -249,14 +336,19 @@ def clear_chat(request: ClearRequest):
         (request.conversation_id,)
     )
 
+
     connection.commit()
+
     connection.close()
+
 
     print(
         f"\nConversation "
         f"{request.conversation_id} cleared!"
     )
 
+
     return {
-        "message": "Conversation cleared successfully"
+        "message":
+        "Conversation cleared successfully"
     }
