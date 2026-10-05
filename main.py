@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
+from typing import Literal
 import sqlite3
 import os
 
@@ -91,7 +92,6 @@ def initialize_database():
             content TEXT NOT NULL,
 
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
         )
     """)
 
@@ -104,7 +104,7 @@ initialize_database()
 
 
 # --------------------------------
-# 7. Request models
+# 7. Request / Response Models
 # --------------------------------
 
 class ChatRequest(BaseModel):
@@ -116,8 +116,22 @@ class ClearRequest(BaseModel):
     conversation_id: str
 
 
+class StructuredChatResponse(BaseModel):
+    topic: str
+
+    difficulty: Literal[
+        "beginner",
+        "intermediate",
+        "advanced"
+    ]
+
+    answer: str
+
+    key_points: list[str]
+
+
 # --------------------------------
-# 8. Save message
+# 8. Save message to database
 # --------------------------------
 
 def save_message(
@@ -177,9 +191,7 @@ def get_conversation_history(
 
     connection.close()
 
-
     conversation_history = []
-
 
     for row in rows:
 
@@ -187,7 +199,6 @@ def get_conversation_history(
             "role": row[0],
             "content": row[1]
         })
-
 
     return conversation_history
 
@@ -212,22 +223,20 @@ def chat(request: ChatRequest):
     conversation_id = request.conversation_id
 
 
-    # Get previous conversation
-    conversation_history = (
-        get_conversation_history(
-            conversation_id
-        )
+    # Get previous conversation history
+    conversation_history = get_conversation_history(
+        conversation_id
     )
 
 
-    # Add current user message
+    # Add current user message to history
     conversation_history.append({
         "role": "user",
         "content": request.message
     })
 
 
-    # Save user message
+    # Save user message to database
     save_message(
         conversation_id,
         "user",
@@ -238,54 +247,43 @@ def chat(request: ChatRequest):
     print("\nConversation ID:")
     print(conversation_id)
 
-
     print("\nHistory being sent to AI:")
     print(conversation_history)
 
 
     # --------------------------------
-    # Generator for streaming
+    # Streaming generator
     # --------------------------------
 
     def generate_response():
 
         full_response = ""
 
-
         try:
 
             stream = client.responses.create(
-
                 model="gpt-6-luna",
-
                 instructions=SYSTEM_PROMPT,
-
                 input=conversation_history,
-
                 stream=True
-
             )
 
 
             for event in stream:
 
-
-                # OpenAI sends small pieces of text
                 if event.type == "response.output_text.delta":
 
                     chunk = event.delta
 
-
-                    # Build complete answer
+                    # Build full answer
                     full_response += chunk
 
-
-                    # Send chunk immediately to browser
+                    # Immediately send chunk to browser
                     yield chunk
 
 
-            # After streaming finishes,
-            # save complete AI answer
+            # Save complete assistant response
+            # after streaming finishes
             if full_response.strip():
 
                 save_message(
@@ -293,7 +291,6 @@ def chat(request: ChatRequest):
                     "assistant",
                     full_response
                 )
-
 
                 print("\nComplete AI Response:")
                 print(full_response)
@@ -304,10 +301,12 @@ def chat(request: ChatRequest):
             print("\nStreaming Error:")
             print(error)
 
-            yield "\nSorry, something went wrong while generating the response."
+            yield (
+                "\nSorry, something went wrong "
+                "while generating the response."
+            )
 
 
-    # Return streaming response instead of JSON
     return StreamingResponse(
         generate_response(),
         media_type="text/plain"
@@ -315,7 +314,97 @@ def chat(request: ChatRequest):
 
 
 # --------------------------------
-# 12. Clear conversation
+# 12. Structured Chat Endpoint
+# --------------------------------
+
+@app.post("/chat/structured")
+def structured_chat(request: ChatRequest):
+
+    conversation_id = request.conversation_id
+
+
+    # Get previous conversation history
+    conversation_history = get_conversation_history(
+        conversation_id
+    )
+
+
+    # Add current user message
+    conversation_history.append({
+        "role": "user",
+        "content": request.message
+    })
+
+
+    # Ask model for structured output
+    response = client.responses.parse(
+
+        model="gpt-6-luna",
+
+        instructions="""
+        You are a helpful AI tutor.
+
+        Analyze the user's question and answer it clearly.
+
+        Determine whether the topic is appropriate for a
+        beginner, intermediate, or advanced learner.
+
+        Provide the main answer and a few important key points.
+
+        Keep the answer beginner-friendly whenever possible.
+        """,
+
+        input=conversation_history,
+
+        text_format=StructuredChatResponse
+    )
+
+
+    structured_answer = response.output_parsed
+
+
+    # Make sure structured output exists
+    if structured_answer is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail="The AI did not return structured output."
+        )
+
+
+    # Save user message
+    save_message(
+        conversation_id,
+        "user",
+        request.message
+    )
+
+
+    # Convert structured result into readable
+    # text for conversation history
+    assistant_text = (
+        structured_answer.answer
+        + "\n\nKey points:\n"
+        + "\n".join(
+            structured_answer.key_points
+        )
+    )
+
+
+    # Save assistant response
+    save_message(
+        conversation_id,
+        "assistant",
+        assistant_text
+    )
+
+
+    # Return structured JSON response
+    return structured_answer.model_dump()
+
+
+# --------------------------------
+# 13. Clear Conversation Endpoint
 # --------------------------------
 
 @app.post("/clear")
@@ -349,6 +438,5 @@ def clear_chat(request: ClearRequest):
 
 
     return {
-        "message":
-        "Conversation cleared successfully"
+        "message": "Conversation cleared successfully"
     }
