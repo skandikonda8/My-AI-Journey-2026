@@ -4,9 +4,10 @@ from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Literal
+
 import sqlite3
-import os
 import json
+import os
 
 
 # --------------------------------
@@ -63,6 +64,16 @@ Explain the concept in beginner-friendly language.
 Provide a small code example when appropriate.
 Explain what the code is doing.
 
+TOOLS:
+You have access to a calculator tool.
+
+Whenever arithmetic calculation is required,
+use the calculator tool instead of calculating
+the answer yourself.
+
+If a tool is needed, call the tool without first
+writing a user-facing answer.
+
 RULES:
 Use conversation history when relevant.
 Do not invent information.
@@ -118,6 +129,7 @@ class ClearRequest(BaseModel):
 
 
 class StructuredChatResponse(BaseModel):
+
     topic: str
 
     difficulty: Literal[
@@ -132,7 +144,7 @@ class StructuredChatResponse(BaseModel):
 
 
 # --------------------------------
-# 8. Save message to database
+# 8. Save Message
 # --------------------------------
 
 def save_message(
@@ -167,7 +179,7 @@ def save_message(
 
 
 # --------------------------------
-# 9. Get conversation history
+# 9. Get Conversation History
 # --------------------------------
 
 def get_conversation_history(
@@ -192,7 +204,9 @@ def get_conversation_history(
 
     connection.close()
 
+
     conversation_history = []
+
 
     for row in rows:
 
@@ -201,36 +215,57 @@ def get_conversation_history(
             "content": row[1]
         })
 
+
     return conversation_history
 
 
-### calculator tool
+# --------------------------------
+# 10. Calculator Python Function
+# --------------------------------
 
 def calculate(
     operation: str,
     a: float,
     b: float
 ):
-    if operation == "add":
-        return a+b
-    elif operation =="subtract":
-        return a-b
-    elif operation == "multiply":
-        return a*b
-    elif operation == "divide":
-        if b==0:
-            return "cannot divide by zero."
-        return a/b
-    else:
-        return "Unsoppurted Operation"
 
-# Tool Definition:
+    if operation == "add":
+
+        return a + b
+
+
+    elif operation == "subtract":
+
+        return a - b
+
+
+    elif operation == "multiply":
+
+        return a * b
+
+
+    elif operation == "divide":
+
+        if b == 0:
+
+            return "Cannot divide by zero."
+
+        return a / b
+
+
+    else:
+
+        return "Unsupported operation."
+
+
 # --------------------------------
-# Tool Definitions
+# 11. Tool Definition
 # --------------------------------
 
 TOOLS = [
+
     {
+
         "type": "function",
 
         "name": "calculator",
@@ -242,11 +277,13 @@ TOOLS = [
         ),
 
         "parameters": {
+
             "type": "object",
 
             "properties": {
 
                 "operation": {
+
                     "type": "string",
 
                     "enum": [
@@ -264,6 +301,7 @@ TOOLS = [
                 "b": {
                     "type": "number"
                 }
+
             },
 
             "required": [
@@ -277,10 +315,12 @@ TOOLS = [
 
         "strict": True
     }
+
 ]
 
+
 # --------------------------------
-# 10. Serve frontend
+# 12. Serve Frontend
 # --------------------------------
 
 @app.get("/")
@@ -290,7 +330,10 @@ def home():
 
 
 # --------------------------------
-# 11. Streaming Chat Endpoint
+# 13. Main Chat Endpoint
+#
+# Normal Chat + Streaming
+# + Automatic Tool Calling
 # --------------------------------
 
 @app.post("/chat")
@@ -299,20 +342,31 @@ def chat(request: ChatRequest):
     conversation_id = request.conversation_id
 
 
-    # Get previous conversation history
-    conversation_history = get_conversation_history(
-        conversation_id
+    # --------------------------------
+    # Load conversation history
+    # --------------------------------
+
+    conversation_history = (
+        get_conversation_history(
+            conversation_id
+        )
     )
 
 
-    # Add current user message to history
+    # --------------------------------
+    # Add current user message
+    # --------------------------------
+
     conversation_history.append({
         "role": "user",
         "content": request.message
     })
 
 
-    # Save user message to database
+    # --------------------------------
+    # Save user message
+    # --------------------------------
+
     save_message(
         conversation_id,
         "user",
@@ -320,61 +374,307 @@ def chat(request: ChatRequest):
     )
 
 
-    print("\nConversation ID:")
+    print("\n--------------------------------")
+
+    print("Conversation ID:")
     print(conversation_id)
 
-    print("\nHistory being sent to AI:")
-    print(conversation_history)
+    print("\nUser Message:")
+    print(request.message)
+
+    print("--------------------------------")
 
 
     # --------------------------------
-    # Streaming generator
+    # Streaming Generator
     # --------------------------------
 
     def generate_response():
 
-        full_response = ""
+        final_answer = ""
+
+        tool_calls = {}
+
+        model_output_items = []
+
 
         try:
 
+            # --------------------------------
+            # FIRST LLM CALL
+            #
+            # Model decides:
+            #
+            # 1. Answer normally
+            #
+            # OR
+            #
+            # 2. Request a tool
+            # --------------------------------
+
             stream = client.responses.create(
+
                 model="gpt-6-luna",
+
                 instructions=SYSTEM_PROMPT,
+
                 input=conversation_history,
+
+                tools=TOOLS,
+
+                tool_choice="auto",
+
                 stream=True
             )
 
 
+            # --------------------------------
+            # Process first stream
+            # --------------------------------
+
             for event in stream:
+
+
+                # --------------------------------
+                # Normal text response
+                # --------------------------------
 
                 if event.type == "response.output_text.delta":
 
                     chunk = event.delta
 
-                    # Build full answer
-                    full_response += chunk
+                    final_answer += chunk
 
-                    # Immediately send chunk to browser
                     yield chunk
 
 
-            # Save complete assistant response
-            # after streaming finishes
-            if full_response.strip():
+                # --------------------------------
+                # Tool call has started
+                # --------------------------------
+
+                elif event.type == "response.output_item.added":
+
+                    if event.item.type == "function_call":
+
+                        tool_calls[
+                            event.output_index
+                        ] = event.item
+
+
+                # --------------------------------
+                # Tool call finished
+                # --------------------------------
+
+                elif event.type == "response.output_item.done":
+
+                    model_output_items.append(
+                        event.item
+                    )
+
+
+                    if event.item.type == "function_call":
+
+                        tool_calls[
+                            event.output_index
+                        ] = event.item
+
+
+            # --------------------------------
+            # NO TOOL WAS USED
+            # --------------------------------
+
+            if not tool_calls:
+
+                if final_answer.strip():
+
+                    save_message(
+                        conversation_id,
+                        "assistant",
+                        final_answer
+                    )
+
+
+                print("\nNo tool required.")
+
+                print("\nFinal Response:")
+                print(final_answer)
+
+                return
+
+
+            # --------------------------------
+            # TOOL WAS REQUESTED
+            # --------------------------------
+
+            print("\nTool requested by LLM.")
+
+
+            # The model output items must be
+            # included when sending tool results
+            # back to the model.
+
+            tool_context = list(
+                conversation_history
+            )
+
+
+            tool_context.extend(
+                model_output_items
+            )
+
+
+            # --------------------------------
+            # Execute requested tools
+            # --------------------------------
+
+            for tool_call in tool_calls.values():
+
+
+                if tool_call.name == "calculator":
+
+
+                    arguments = json.loads(
+                        tool_call.arguments
+                    )
+
+
+                    operation = arguments[
+                        "operation"
+                    ]
+
+                    a = arguments["a"]
+
+                    b = arguments["b"]
+
+
+                    print(
+                        "\nCalculator requested:"
+                    )
+
+                    print(
+                        "Operation:",
+                        operation
+                    )
+
+                    print(
+                        "A:",
+                        a
+                    )
+
+                    print(
+                        "B:",
+                        b
+                    )
+
+
+                    # --------------------------------
+                    # REAL Python execution
+                    # --------------------------------
+
+                    result = calculate(
+                        operation,
+                        a,
+                        b
+                    )
+
+
+                    print(
+                        "Calculator result:",
+                        result
+                    )
+
+
+                    # --------------------------------
+                    # Send tool result back
+                    # --------------------------------
+
+                    tool_context.append({
+
+                        "type":
+                            "function_call_output",
+
+                        "call_id":
+                            tool_call.call_id,
+
+                        "output":
+                            json.dumps({
+                                "result": result
+                            })
+
+                    })
+
+
+            # --------------------------------
+            # SECOND LLM CALL
+            #
+            # LLM now sees the tool result
+            # and produces final answer.
+            # --------------------------------
+
+            final_stream = (
+                client.responses.create(
+
+                    model="gpt-6-luna",
+
+                    instructions=SYSTEM_PROMPT,
+
+                    input=tool_context,
+
+                    tools=TOOLS,
+
+                    tool_choice="none",
+
+                    stream=True
+                )
+            )
+
+
+            # Reset because any text from
+            # the first response should not
+            # become the stored final answer.
+
+            final_answer = ""
+
+
+            # --------------------------------
+            # Stream final answer
+            # --------------------------------
+
+            for event in final_stream:
+
+
+                if (
+                    event.type
+                    == "response.output_text.delta"
+                ):
+
+                    chunk = event.delta
+
+                    final_answer += chunk
+
+                    yield chunk
+
+
+            # --------------------------------
+            # Save complete AI response
+            # --------------------------------
+
+            if final_answer.strip():
 
                 save_message(
                     conversation_id,
                     "assistant",
-                    full_response
+                    final_answer
                 )
 
-                print("\nComplete AI Response:")
-                print(full_response)
+
+            print("\nFinal Response:")
+            print(final_answer)
 
 
         except Exception as error:
 
-            print("\nStreaming Error:")
+            print("\nChat Error:")
             print(error)
 
             yield (
@@ -383,6 +683,10 @@ def chat(request: ChatRequest):
             )
 
 
+    # --------------------------------
+    # Send streaming response
+    # --------------------------------
+
     return StreamingResponse(
         generate_response(),
         media_type="text/plain"
@@ -390,29 +694,47 @@ def chat(request: ChatRequest):
 
 
 # --------------------------------
-# 12. Structured Chat Endpoint
+# 14. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
-def structured_chat(request: ChatRequest):
+def structured_chat(
+    request: ChatRequest
+):
 
-    conversation_id = request.conversation_id
-
-
-    # Get previous conversation history
-    conversation_history = get_conversation_history(
-        conversation_id
+    conversation_id = (
+        request.conversation_id
     )
 
 
-    # Add current user message
+    # --------------------------------
+    # Get previous history
+    # --------------------------------
+
+    conversation_history = (
+        get_conversation_history(
+            conversation_id
+        )
+    )
+
+
+    # --------------------------------
+    # Add current message
+    # --------------------------------
+
     conversation_history.append({
+
         "role": "user",
+
         "content": request.message
+
     })
 
 
-    # Ask model for structured output
+    # --------------------------------
+    # Structured AI call
+    # --------------------------------
+
     response = client.responses.parse(
 
         model="gpt-6-luna",
@@ -420,14 +742,18 @@ def structured_chat(request: ChatRequest):
         instructions="""
         You are a helpful AI tutor.
 
-        Analyze the user's question and answer it clearly.
+        Analyze the user's question
+        and answer it clearly.
 
-        Determine whether the topic is appropriate for a
-        beginner, intermediate, or advanced learner.
+        Determine whether the topic
+        is appropriate for a beginner,
+        intermediate, or advanced learner.
 
-        Provide the main answer and a few important key points.
+        Provide the main answer and
+        a few important key points.
 
-        Keep the answer beginner-friendly whenever possible.
+        Keep the answer beginner-friendly
+        whenever possible.
         """,
 
         input=conversation_history,
@@ -436,19 +762,32 @@ def structured_chat(request: ChatRequest):
     )
 
 
-    structured_answer = response.output_parsed
+    structured_answer = (
+        response.output_parsed
+    )
 
 
-    # Make sure structured output exists
+    # --------------------------------
+    # Defensive check
+    # --------------------------------
+
     if structured_answer is None:
 
         raise HTTPException(
+
             status_code=500,
-            detail="The AI did not return structured output."
+
+            detail=(
+                "The AI did not return "
+                "structured output."
+            )
         )
 
 
+    # --------------------------------
     # Save user message
+    # --------------------------------
+
     save_message(
         conversation_id,
         "user",
@@ -456,18 +795,26 @@ def structured_chat(request: ChatRequest):
     )
 
 
-    # Convert structured result into readable
-    # text for conversation history
+    # --------------------------------
+    # Create readable history text
+    # --------------------------------
+
     assistant_text = (
+
         structured_answer.answer
+
         + "\n\nKey points:\n"
+
         + "\n".join(
             structured_answer.key_points
         )
     )
 
 
+    # --------------------------------
     # Save assistant response
+    # --------------------------------
+
     save_message(
         conversation_id,
         "assistant",
@@ -475,252 +822,23 @@ def structured_chat(request: ChatRequest):
     )
 
 
-    # Return structured JSON response
-    return structured_answer.model_dump()
-
-# --------------------------------
-# Tool Calling Chat Endpoint
-# --------------------------------
-
-@app.post("/chat/tools")
-def tool_chat(request: ChatRequest):
-
-    conversation_id = request.conversation_id
-
-
     # --------------------------------
-    # Get previous conversation
+    # Return structured JSON
     # --------------------------------
 
-    conversation_history = get_conversation_history(
-        conversation_id
+    return (
+        structured_answer.model_dump()
     )
-
-
-    # --------------------------------
-    # Add current user message
-    # --------------------------------
-
-    conversation_history.append({
-        "role": "user",
-        "content": request.message
-    })
-
-
-    # --------------------------------
-    # First LLM request
-    # --------------------------------
-
-    response = client.responses.create(
-
-        model="gpt-6-luna",
-
-        instructions="""
-        You are a helpful AI assistant.
-
-        You have access to a calculator tool.
-
-        Whenever arithmetic is required,
-        use the calculator tool instead of
-        calculating the result yourself.
-
-        If no tool is needed, answer normally.
-
-        Use simple plain text.
-        """,
-
-        input=conversation_history,
-
-        tools=TOOLS,
-
-        tool_choice="auto"
-    )
-
-
-    # --------------------------------
-    # Preserve model output
-    # --------------------------------
-
-    conversation_history.extend(
-        item.model_dump(exclude_none=True)
-        for item in response.output
-    )
-
-
-    used_tools = []
-
-
-    # --------------------------------
-    # Look for function calls
-    # --------------------------------
-
-    for item in response.output:
-
-
-        if item.type != "function_call":
-            continue
-
-
-        # --------------------------------
-        # Calculator requested
-        # --------------------------------
-
-        if item.name == "calculator":
-
-            arguments = json.loads(
-                item.arguments
-            )
-
-
-            operation = arguments[
-                "operation"
-            ]
-
-            a = arguments["a"]
-
-            b = arguments["b"]
-
-
-            print("\nCalculator tool requested:")
-
-            print(
-                "Operation:",
-                operation
-            )
-
-            print(
-                "A:",
-                a
-            )
-
-            print(
-                "B:",
-                b
-            )
-
-
-            # --------------------------------
-            # Execute real Python function
-            # --------------------------------
-
-            result = calculate(
-                operation,
-                a,
-                b
-            )
-
-
-            print(
-                "\nCalculator result:",
-                result
-            )
-
-
-            used_tools.append(
-                "calculator"
-            )
-
-
-            # --------------------------------
-            # Send tool result back to LLM
-            # --------------------------------
-
-            conversation_history.append({
-                "type":
-                    "function_call_output",
-
-                "call_id":
-                    item.call_id,
-
-                "output":
-                    json.dumps({
-                        "result": result
-                    })
-            })
-
-
-    # --------------------------------
-    # Tool was used
-    # --------------------------------
-
-    if used_tools:
-
-        final_response = client.responses.create(
-
-            model="gpt-6-luna",
-
-            instructions="""
-            Give the user a clear final answer
-            using the result returned by the tool.
-
-            Use simple plain text.
-            """,
-
-            input=conversation_history,
-
-            tools=TOOLS,
-
-            tool_choice="none"
-        )
-
-
-        final_answer = (
-            final_response.output_text
-        )
-
-
-    # --------------------------------
-    # No tool needed
-    # --------------------------------
-
-    else:
-
-        final_answer = (
-            response.output_text
-        )
-
-
-    # --------------------------------
-    # Save conversation to SQLite
-    # --------------------------------
-
-    save_message(
-        conversation_id,
-        "user",
-        request.message
-    )
-
-
-    save_message(
-        conversation_id,
-        "assistant",
-        final_answer
-    )
-
-
-    # --------------------------------
-    # Return response
-    # --------------------------------
-
-    return {
-
-        "conversation_id":
-            conversation_id,
-
-        "used_tools":
-            used_tools,
-
-        "bot_response":
-            final_answer
-    }
 
 
 # --------------------------------
-# 13. Clear Conversation Endpoint
+# 15. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")
-def clear_chat(request: ClearRequest):
+def clear_chat(
+    request: ClearRequest
+):
 
     connection = sqlite3.connect(
         DATABASE_NAME
@@ -730,11 +848,15 @@ def clear_chat(request: ClearRequest):
 
 
     cursor.execute(
+
         """
         DELETE FROM messages
         WHERE conversation_id = ?
         """,
-        (request.conversation_id,)
+
+        (
+            request.conversation_id,
+        )
     )
 
 
@@ -745,10 +867,14 @@ def clear_chat(request: ClearRequest):
 
     print(
         f"\nConversation "
-        f"{request.conversation_id} cleared!"
+        f"{request.conversation_id} "
+        f"cleared!"
     )
 
 
     return {
-        "message": "Conversation cleared successfully"
+
+        "message":
+            "Conversation cleared successfully"
+
     }
