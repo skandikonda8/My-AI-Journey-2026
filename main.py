@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from typing import Literal
 import sqlite3
 import os
+import json
 
 
 # --------------------------------
@@ -202,6 +203,81 @@ def get_conversation_history(
 
     return conversation_history
 
+
+### calculator tool
+
+def calculate(
+    operation: str,
+    a: float,
+    b: float
+):
+    if operation == "add":
+        return a+b
+    elif operation =="subtract":
+        return a-b
+    elif operation == "multiply":
+        return a*b
+    elif operation == "divide":
+        if b==0:
+            return "cannot divide by zero."
+        return a/b
+    else:
+        return "Unsoppurted Operation"
+
+# Tool Definition:
+# --------------------------------
+# Tool Definitions
+# --------------------------------
+
+TOOLS = [
+    {
+        "type": "function",
+
+        "name": "calculator",
+
+        "description": (
+            "Perform basic arithmetic calculations. "
+            "Use this tool for addition, subtraction, "
+            "multiplication, and division."
+        ),
+
+        "parameters": {
+            "type": "object",
+
+            "properties": {
+
+                "operation": {
+                    "type": "string",
+
+                    "enum": [
+                        "add",
+                        "subtract",
+                        "multiply",
+                        "divide"
+                    ]
+                },
+
+                "a": {
+                    "type": "number"
+                },
+
+                "b": {
+                    "type": "number"
+                }
+            },
+
+            "required": [
+                "operation",
+                "a",
+                "b"
+            ],
+
+            "additionalProperties": False
+        },
+
+        "strict": True
+    }
+]
 
 # --------------------------------
 # 10. Serve frontend
@@ -401,6 +477,242 @@ def structured_chat(request: ChatRequest):
 
     # Return structured JSON response
     return structured_answer.model_dump()
+
+# --------------------------------
+# Tool Calling Chat Endpoint
+# --------------------------------
+
+@app.post("/chat/tools")
+def tool_chat(request: ChatRequest):
+
+    conversation_id = request.conversation_id
+
+
+    # --------------------------------
+    # Get previous conversation
+    # --------------------------------
+
+    conversation_history = get_conversation_history(
+        conversation_id
+    )
+
+
+    # --------------------------------
+    # Add current user message
+    # --------------------------------
+
+    conversation_history.append({
+        "role": "user",
+        "content": request.message
+    })
+
+
+    # --------------------------------
+    # First LLM request
+    # --------------------------------
+
+    response = client.responses.create(
+
+        model="gpt-6-luna",
+
+        instructions="""
+        You are a helpful AI assistant.
+
+        You have access to a calculator tool.
+
+        Whenever arithmetic is required,
+        use the calculator tool instead of
+        calculating the result yourself.
+
+        If no tool is needed, answer normally.
+
+        Use simple plain text.
+        """,
+
+        input=conversation_history,
+
+        tools=TOOLS,
+
+        tool_choice="auto"
+    )
+
+
+    # --------------------------------
+    # Preserve model output
+    # --------------------------------
+
+    conversation_history.extend(
+        item.model_dump(exclude_none=True)
+        for item in response.output
+    )
+
+
+    used_tools = []
+
+
+    # --------------------------------
+    # Look for function calls
+    # --------------------------------
+
+    for item in response.output:
+
+
+        if item.type != "function_call":
+            continue
+
+
+        # --------------------------------
+        # Calculator requested
+        # --------------------------------
+
+        if item.name == "calculator":
+
+            arguments = json.loads(
+                item.arguments
+            )
+
+
+            operation = arguments[
+                "operation"
+            ]
+
+            a = arguments["a"]
+
+            b = arguments["b"]
+
+
+            print("\nCalculator tool requested:")
+
+            print(
+                "Operation:",
+                operation
+            )
+
+            print(
+                "A:",
+                a
+            )
+
+            print(
+                "B:",
+                b
+            )
+
+
+            # --------------------------------
+            # Execute real Python function
+            # --------------------------------
+
+            result = calculate(
+                operation,
+                a,
+                b
+            )
+
+
+            print(
+                "\nCalculator result:",
+                result
+            )
+
+
+            used_tools.append(
+                "calculator"
+            )
+
+
+            # --------------------------------
+            # Send tool result back to LLM
+            # --------------------------------
+
+            conversation_history.append({
+                "type":
+                    "function_call_output",
+
+                "call_id":
+                    item.call_id,
+
+                "output":
+                    json.dumps({
+                        "result": result
+                    })
+            })
+
+
+    # --------------------------------
+    # Tool was used
+    # --------------------------------
+
+    if used_tools:
+
+        final_response = client.responses.create(
+
+            model="gpt-6-luna",
+
+            instructions="""
+            Give the user a clear final answer
+            using the result returned by the tool.
+
+            Use simple plain text.
+            """,
+
+            input=conversation_history,
+
+            tools=TOOLS,
+
+            tool_choice="none"
+        )
+
+
+        final_answer = (
+            final_response.output_text
+        )
+
+
+    # --------------------------------
+    # No tool needed
+    # --------------------------------
+
+    else:
+
+        final_answer = (
+            response.output_text
+        )
+
+
+    # --------------------------------
+    # Save conversation to SQLite
+    # --------------------------------
+
+    save_message(
+        conversation_id,
+        "user",
+        request.message
+    )
+
+
+    save_message(
+        conversation_id,
+        "assistant",
+        final_answer
+    )
+
+
+    # --------------------------------
+    # Return response
+    # --------------------------------
+
+    return {
+
+        "conversation_id":
+            conversation_id,
+
+        "used_tools":
+            used_tools,
+
+        "bot_response":
+            final_answer
+    }
 
 
 # --------------------------------
