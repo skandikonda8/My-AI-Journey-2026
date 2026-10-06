@@ -8,6 +8,7 @@ from typing import Literal
 import sqlite3
 import json
 import os
+import math
 
 
 # --------------------------------
@@ -34,10 +35,11 @@ app = FastAPI()
 
 
 # --------------------------------
-# 4. Database
+# 4. Configuration
 # --------------------------------
 
 DATABASE_NAME = "chatbot.db"
+EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 # --------------------------------
@@ -87,28 +89,20 @@ Answer the user's actual question without unnecessary information.
 # --------------------------------
 
 def initialize_database():
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             conversation_id TEXT NOT NULL,
-
             role TEXT NOT NULL,
-
             content TEXT NOT NULL,
-
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
     connection.commit()
-
     connection.close()
 
 
@@ -124,12 +118,15 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class EmbeddingSearchRequest(BaseModel):
+    query: str
+
+
 class ClearRequest(BaseModel):
     conversation_id: str
 
 
 class StructuredChatResponse(BaseModel):
-
     topic: str
 
     difficulty: Literal[
@@ -139,7 +136,6 @@ class StructuredChatResponse(BaseModel):
     ]
 
     answer: str
-
     key_points: list[str]
 
 
@@ -152,9 +148,7 @@ def save_message(
     role: str,
     content: str
 ):
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -174,7 +168,6 @@ def save_message(
     )
 
     connection.commit()
-
     connection.close()
 
 
@@ -185,9 +178,7 @@ def save_message(
 def get_conversation_history(
     conversation_id: str
 ):
-
     connection = sqlite3.connect(DATABASE_NAME)
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -201,20 +192,15 @@ def get_conversation_history(
     )
 
     rows = cursor.fetchall()
-
     connection.close()
-
 
     conversation_history = []
 
-
     for row in rows:
-
         conversation_history.append({
             "role": row[0],
             "content": row[1]
         })
-
 
     return conversation_history
 
@@ -228,34 +214,22 @@ def calculate(
     a: float,
     b: float
 ):
-
     if operation == "add":
-
         return a + b
 
-
     elif operation == "subtract":
-
         return a - b
 
-
     elif operation == "multiply":
-
         return a * b
 
-
     elif operation == "divide":
-
         if b == 0:
-
             return "Cannot divide by zero."
 
         return a / b
 
-
-    else:
-
-        return "Unsupported operation."
+    return "Unsupported operation."
 
 
 # --------------------------------
@@ -263,29 +237,19 @@ def calculate(
 # --------------------------------
 
 TOOLS = [
-
     {
-
         "type": "function",
-
         "name": "calculator",
-
         "description": (
             "Perform basic arithmetic calculations. "
             "Use this tool for addition, subtraction, "
             "multiplication, and division."
         ),
-
         "parameters": {
-
             "type": "object",
-
             "properties": {
-
                 "operation": {
-
                     "type": "string",
-
                     "enum": [
                         "add",
                         "subtract",
@@ -293,44 +257,148 @@ TOOLS = [
                         "divide"
                     ]
                 },
-
                 "a": {
                     "type": "number"
                 },
-
                 "b": {
                     "type": "number"
                 }
-
             },
-
             "required": [
                 "operation",
                 "a",
                 "b"
             ],
-
             "additionalProperties": False
         },
-
         "strict": True
     }
-
 ]
 
 
 # --------------------------------
-# 12. Serve Frontend
+# 12. Sample Documents
+# --------------------------------
+
+SAMPLE_DOCUMENTS = [
+    (
+        "Python inheritance allows a child class "
+        "to reuse properties and methods from "
+        "a parent class."
+    ),
+    (
+        "FastAPI is a Python web framework "
+        "used to build APIs and backend services."
+    ),
+    (
+        "SQLite is a lightweight relational "
+        "database that stores data in a local file."
+    ),
+    (
+        "Embeddings convert text into numerical "
+        "vectors that represent semantic meaning."
+    ),
+    (
+        "Retrieval Augmented Generation retrieves "
+        "relevant information before asking an LLM "
+        "to generate an answer."
+    )
+]
+
+
+# --------------------------------
+# 13. Create Embedding
+# --------------------------------
+
+def create_embedding(text: str):
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=text
+    )
+
+    return response.data[0].embedding
+
+
+# --------------------------------
+# 14. Cosine Similarity
+# --------------------------------
+
+def cosine_similarity(
+    vector_a,
+    vector_b
+):
+    dot_product = sum(
+        a * b
+        for a, b in zip(
+            vector_a,
+            vector_b
+        )
+    )
+
+    magnitude_a = math.sqrt(
+        sum(
+            a * a
+            for a in vector_a
+        )
+    )
+
+    magnitude_b = math.sqrt(
+        sum(
+            b * b
+            for b in vector_b
+        )
+    )
+
+    if magnitude_a == 0 or magnitude_b == 0:
+        return 0.0
+
+    return (
+        dot_product
+        / (magnitude_a * magnitude_b)
+    )
+
+
+# --------------------------------
+# 15. Cache Document Embeddings
+# --------------------------------
+
+DOCUMENT_EMBEDDINGS = None
+
+
+def get_document_embeddings():
+    global DOCUMENT_EMBEDDINGS
+
+    if DOCUMENT_EMBEDDINGS is not None:
+        return DOCUMENT_EMBEDDINGS
+
+    print("\nCreating sample document embeddings...")
+
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=SAMPLE_DOCUMENTS
+    )
+
+    DOCUMENT_EMBEDDINGS = [
+        item.embedding
+        for item in response.data
+    ]
+
+    print("Document embeddings created.")
+
+    return DOCUMENT_EMBEDDINGS
+
+
+# --------------------------------
+# 16. Serve Frontend
 # --------------------------------
 
 @app.get("/")
 def home():
-
     return FileResponse("index.html")
 
 
 # --------------------------------
-# 13. Main Chat Endpoint
+# 17. Main Chat Endpoint
 #
 # Normal Chat + Streaming
 # + Automatic Tool Calling
@@ -338,34 +406,16 @@ def home():
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-
     conversation_id = request.conversation_id
 
-
-    # --------------------------------
-    # Load conversation history
-    # --------------------------------
-
-    conversation_history = (
-        get_conversation_history(
-            conversation_id
-        )
+    conversation_history = get_conversation_history(
+        conversation_id
     )
-
-
-    # --------------------------------
-    # Add current user message
-    # --------------------------------
 
     conversation_history.append({
         "role": "user",
         "content": request.message
     })
-
-
-    # --------------------------------
-    # Save user message
-    # --------------------------------
 
     save_message(
         conversation_id,
@@ -373,203 +423,80 @@ def chat(request: ChatRequest):
         request.message
     )
 
-
     print("\n--------------------------------")
-
     print("Conversation ID:")
     print(conversation_id)
-
     print("\nUser Message:")
     print(request.message)
-
     print("--------------------------------")
 
-
-    # --------------------------------
-    # Streaming Generator
-    # --------------------------------
-
     def generate_response():
-
         final_answer = ""
-
         tool_calls = {}
-
         model_output_items = []
 
-
         try:
-
-            # --------------------------------
-            # FIRST LLM CALL
-            #
-            # Model decides:
-            #
-            # 1. Answer normally
-            #
-            # OR
-            #
-            # 2. Request a tool
-            # --------------------------------
-
+            # First LLM call:
+            # answer normally OR request a tool
             stream = client.responses.create(
-
                 model="gpt-6-luna",
-
                 instructions=SYSTEM_PROMPT,
-
                 input=conversation_history,
-
                 tools=TOOLS,
-
                 tool_choice="auto",
-
                 stream=True
             )
 
-
-            # --------------------------------
-            # Process first stream
-            # --------------------------------
-
             for event in stream:
-
-
-                # --------------------------------
-                # Normal text response
-                # --------------------------------
-
                 if event.type == "response.output_text.delta":
-
                     chunk = event.delta
-
                     final_answer += chunk
-
                     yield chunk
 
-
-                # --------------------------------
-                # Tool call has started
-                # --------------------------------
-
                 elif event.type == "response.output_item.added":
-
                     if event.item.type == "function_call":
-
-                        tool_calls[
-                            event.output_index
-                        ] = event.item
-
-
-                # --------------------------------
-                # Tool call finished
-                # --------------------------------
+                        tool_calls[event.output_index] = event.item
 
                 elif event.type == "response.output_item.done":
-
-                    model_output_items.append(
-                        event.item
-                    )
-
+                    model_output_items.append(event.item)
 
                     if event.item.type == "function_call":
+                        tool_calls[event.output_index] = event.item
 
-                        tool_calls[
-                            event.output_index
-                        ] = event.item
-
-
-            # --------------------------------
-            # NO TOOL WAS USED
-            # --------------------------------
-
+            # No tool used
             if not tool_calls:
-
                 if final_answer.strip():
-
                     save_message(
                         conversation_id,
                         "assistant",
                         final_answer
                     )
 
-
                 print("\nNo tool required.")
-
                 print("\nFinal Response:")
                 print(final_answer)
-
                 return
 
-
-            # --------------------------------
-            # TOOL WAS REQUESTED
-            # --------------------------------
-
+            # Tool requested
             print("\nTool requested by LLM.")
 
-
-            # The model output items must be
-            # included when sending tool results
-            # back to the model.
-
-            tool_context = list(
-                conversation_history
-            )
-
-
-            tool_context.extend(
-                model_output_items
-            )
-
-
-            # --------------------------------
-            # Execute requested tools
-            # --------------------------------
+            tool_context = list(conversation_history)
+            tool_context.extend(model_output_items)
 
             for tool_call in tool_calls.values():
-
-
                 if tool_call.name == "calculator":
-
-
                     arguments = json.loads(
                         tool_call.arguments
                     )
 
-
-                    operation = arguments[
-                        "operation"
-                    ]
-
+                    operation = arguments["operation"]
                     a = arguments["a"]
-
                     b = arguments["b"]
 
-
-                    print(
-                        "\nCalculator requested:"
-                    )
-
-                    print(
-                        "Operation:",
-                        operation
-                    )
-
-                    print(
-                        "A:",
-                        a
-                    )
-
-                    print(
-                        "B:",
-                        b
-                    )
-
-
-                    # --------------------------------
-                    # REAL Python execution
-                    # --------------------------------
+                    print("\nCalculator requested:")
+                    print("Operation:", operation)
+                    print("A:", a)
+                    print("B:", b)
 
                     result = calculate(
                         operation,
@@ -577,103 +504,46 @@ def chat(request: ChatRequest):
                         b
                     )
 
-
-                    print(
-                        "Calculator result:",
-                        result
-                    )
-
-
-                    # --------------------------------
-                    # Send tool result back
-                    # --------------------------------
+                    print("Calculator result:", result)
 
                     tool_context.append({
-
-                        "type":
-                            "function_call_output",
-
-                        "call_id":
-                            tool_call.call_id,
-
-                        "output":
-                            json.dumps({
-                                "result": result
-                            })
-
+                        "type": "function_call_output",
+                        "call_id": tool_call.call_id,
+                        "output": json.dumps({
+                            "result": result
+                        })
                     })
 
-
-            # --------------------------------
-            # SECOND LLM CALL
-            #
-            # LLM now sees the tool result
-            # and produces final answer.
-            # --------------------------------
-
-            final_stream = (
-                client.responses.create(
-
-                    model="gpt-6-luna",
-
-                    instructions=SYSTEM_PROMPT,
-
-                    input=tool_context,
-
-                    tools=TOOLS,
-
-                    tool_choice="none",
-
-                    stream=True
-                )
+            # Second LLM call:
+            # produce final answer from tool result
+            final_stream = client.responses.create(
+                model="gpt-6-luna",
+                instructions=SYSTEM_PROMPT,
+                input=tool_context,
+                tools=TOOLS,
+                tool_choice="none",
+                stream=True
             )
-
-
-            # Reset because any text from
-            # the first response should not
-            # become the stored final answer.
 
             final_answer = ""
 
-
-            # --------------------------------
-            # Stream final answer
-            # --------------------------------
-
             for event in final_stream:
-
-
-                if (
-                    event.type
-                    == "response.output_text.delta"
-                ):
-
+                if event.type == "response.output_text.delta":
                     chunk = event.delta
-
                     final_answer += chunk
-
                     yield chunk
 
-
-            # --------------------------------
-            # Save complete AI response
-            # --------------------------------
-
             if final_answer.strip():
-
                 save_message(
                     conversation_id,
                     "assistant",
                     final_answer
                 )
 
-
             print("\nFinal Response:")
             print(final_answer)
 
-
         except Exception as error:
-
             print("\nChat Error:")
             print(error)
 
@@ -682,11 +552,6 @@ def chat(request: ChatRequest):
                 "while generating the response."
             )
 
-
-    # --------------------------------
-    # Send streaming response
-    # --------------------------------
-
     return StreamingResponse(
         generate_response(),
         media_type="text/plain"
@@ -694,99 +559,49 @@ def chat(request: ChatRequest):
 
 
 # --------------------------------
-# 14. Structured Chat Endpoint
+# 18. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
 def structured_chat(
     request: ChatRequest
 ):
+    conversation_id = request.conversation_id
 
-    conversation_id = (
-        request.conversation_id
+    conversation_history = get_conversation_history(
+        conversation_id
     )
-
-
-    # --------------------------------
-    # Get previous history
-    # --------------------------------
-
-    conversation_history = (
-        get_conversation_history(
-            conversation_id
-        )
-    )
-
-
-    # --------------------------------
-    # Add current message
-    # --------------------------------
 
     conversation_history.append({
-
         "role": "user",
-
         "content": request.message
-
     })
 
-
-    # --------------------------------
-    # Structured AI call
-    # --------------------------------
-
     response = client.responses.parse(
-
         model="gpt-6-luna",
-
         instructions="""
         You are a helpful AI tutor.
 
-        Analyze the user's question
-        and answer it clearly.
+        Analyze the user's question and answer it clearly.
 
-        Determine whether the topic
-        is appropriate for a beginner,
-        intermediate, or advanced learner.
+        Determine whether the topic is appropriate for a
+        beginner, intermediate, or advanced learner.
 
-        Provide the main answer and
-        a few important key points.
+        Provide the main answer and a few important key points.
 
-        Keep the answer beginner-friendly
-        whenever possible.
+        Keep the answer beginner-friendly whenever possible.
         """,
-
         input=conversation_history,
-
         text_format=StructuredChatResponse
     )
 
-
-    structured_answer = (
-        response.output_parsed
-    )
-
-
-    # --------------------------------
-    # Defensive check
-    # --------------------------------
+    structured_answer = response.output_parsed
 
     if structured_answer is None:
-
         raise HTTPException(
-
             status_code=500,
-
-            detail=(
-                "The AI did not return "
-                "structured output."
-            )
+            detail="The AI did not return structured output."
         )
-
-
-    # --------------------------------
-    # Save user message
-    # --------------------------------
 
     save_message(
         conversation_id,
@@ -794,26 +609,13 @@ def structured_chat(
         request.message
     )
 
-
-    # --------------------------------
-    # Create readable history text
-    # --------------------------------
-
     assistant_text = (
-
         structured_answer.answer
-
         + "\n\nKey points:\n"
-
         + "\n".join(
             structured_answer.key_points
         )
     )
-
-
-    # --------------------------------
-    # Save assistant response
-    # --------------------------------
 
     save_message(
         conversation_id,
@@ -821,49 +623,89 @@ def structured_chat(
         assistant_text
     )
 
-
-    # --------------------------------
-    # Return structured JSON
-    # --------------------------------
-
-    return (
-        structured_answer.model_dump()
-    )
+    return structured_answer.model_dump()
 
 
 # --------------------------------
-# 15. Clear Conversation
+# 19. Embedding Semantic Search
+# --------------------------------
+
+@app.post("/embeddings/search")
+def embedding_search(
+    request: EmbeddingSearchRequest
+):
+    # Create embedding for the user query
+    query_embedding = create_embedding(
+        request.query
+    )
+
+    # Get cached sample-document embeddings
+    document_embeddings = (
+        get_document_embeddings()
+    )
+
+    results = []
+
+    # Compare query against each document
+    for index, document_embedding in enumerate(
+        document_embeddings
+    ):
+        similarity = cosine_similarity(
+            query_embedding,
+            document_embedding
+        )
+
+        results.append({
+            "document": SAMPLE_DOCUMENTS[index],
+            "similarity": round(
+                similarity,
+                4
+            )
+        })
+
+    # Highest similarity first
+    results.sort(
+        key=lambda item: item["similarity"],
+        reverse=True
+    )
+
+    return {
+        "query": request.query,
+        "embedding_dimensions": len(
+            query_embedding
+        ),
+        "embedding_preview": query_embedding[:8],
+        "best_match": results[0],
+        "top_matches": results[:3]
+    }
+
+
+# --------------------------------
+# 20. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")
 def clear_chat(
     request: ClearRequest
 ):
-
     connection = sqlite3.connect(
         DATABASE_NAME
     )
 
     cursor = connection.cursor()
 
-
     cursor.execute(
-
         """
         DELETE FROM messages
         WHERE conversation_id = ?
         """,
-
         (
             request.conversation_id,
         )
     )
 
-
     connection.commit()
-
     connection.close()
-
 
     print(
         f"\nConversation "
@@ -871,10 +713,6 @@ def clear_chat(
         f"cleared!"
     )
 
-
     return {
-
-        "message":
-            "Conversation cleared successfully"
-
+        "message": "Conversation cleared successfully"
     }
