@@ -4,7 +4,9 @@ This repository documents my step-by-step journey into Artificial Intelligence a
 
 # Project 1 — AI Chatbot
 
-The goal of this project is to progressively build a production-style AI chatbot while learning the concepts behind LLM applications.
+The goal of this project is to progressively build a production-style AI chatbot while learning the concepts behind modern LLM applications.
+
+---
 
 ## Milestone 1 — Basic AI Chatbot API
 
@@ -54,17 +56,17 @@ Added a browser-based chatbot interface using HTML, CSS, and JavaScript.
 
 ```text
 User
- ↓
+↓
 HTML / JavaScript
- ↓
+↓
 FastAPI
- ↓
+↓
 LLM
- ↓
+↓
 FastAPI
- ↓
+↓
 JavaScript
- ↓
+↓
 Chat UI
 ```
 
@@ -84,7 +86,7 @@ Changed the chatbot from GET requests to POST requests.
 - Pydantic models
 - Request validation
 
-Example request:
+### Example Request
 
 ```json
 {
@@ -107,7 +109,7 @@ Added temporary conversation memory so the chatbot can remember earlier messages
 - Why LLMs do not automatically remember previous requests
 - Token growth with conversation history
 
-Example:
+### Example
 
 ```text
 User: My name is Subhash.
@@ -131,7 +133,7 @@ Added the ability to start a new conversation and clear existing chatbot memory.
 - Clearing frontend state vs backend state
 - Creating API endpoints for application actions
 
-Endpoint:
+### Endpoint
 
 ```text
 POST /clear
@@ -150,15 +152,15 @@ Added unique conversation IDs so multiple conversations can have separate histor
 - State management
 - Separating multiple conversations
 
-Example:
+### Example
 
 ```text
 conversation_1
-    ↓
+   ↓
 History A
 
 conversation_2
-    ↓
+   ↓
 History B
 ```
 
@@ -193,7 +195,7 @@ content
 created_at
 ```
 
-Example:
+### Example
 
 ```text
 1 | abc123 | user      | My name is Subhash
@@ -206,25 +208,25 @@ Example:
 
 ```text
 User
-  ↓
+ ↓
 Frontend
-  ↓
+ ↓
 Conversation ID
-  ↓
+ ↓
 FastAPI
-  ↓
+ ↓
 SQLite Database
-  ↓
+ ↓
 Load Conversation History
-  ↓
+ ↓
 OpenAI API
-  ↓
+ ↓
 LLM
-  ↓
+ ↓
 Save New Messages
-  ↓
+ ↓
 SQLite Database
-  ↓
+ ↓
 Frontend
 ```
 
@@ -232,11 +234,7 @@ The local SQLite database is excluded from GitHub because it may contain convers
 
 ---
 
-# Upcoming Milestones
-
 ## Milestone 8 — Prompt Engineering
-
-
 
 Improved control over the chatbot's behavior using structured system prompts.
 
@@ -254,6 +252,7 @@ Improved control over the chatbot's behavior using structured system prompts.
 - Prompt engineering vs model training
 - Introduction to prompt injection
 
+---
 
 ## Milestone 9 — Streaming AI Responses
 
@@ -277,6 +276,7 @@ Added real-time streaming so AI responses appear progressively while the model i
 
 ### Architecture
 
+```text
 User
 ↓
 FastAPI
@@ -292,6 +292,9 @@ FastAPI StreamingResponse
 JavaScript Stream Reader
 ↓
 Live Chat Interface
+```
+
+---
 
 ## Milestone 10 — Structured Outputs
 
@@ -325,6 +328,9 @@ Added structured AI responses using Pydantic schemas and the OpenAI Responses AP
     "They support reusable behavior"
   ]
 }
+```
+
+---
 
 ## Milestone 11 — Tool Calling
 
@@ -373,13 +379,345 @@ FastAPI
 LLM
 ↓
 Does the question require a tool?
+
+No
 ↓
-Yes → Python Tool
+Generate normal answer
+↓
+Stream response to browser
+
+Yes
+↓
+Function Call Request
+↓
+Python Tool Execution
 ↓
 Tool Result
 ↓
-LLM
+Result Sent Back to LLM
 ↓
-Final Response
+LLM Generates Final Response
 ↓
-Browser
+Stream Response to Browser
+```
+
+---
+
+## Milestone 12 — Embeddings and Semantic Search
+
+Added text embeddings and built a basic semantic search system.
+
+The application can now convert text into numerical vectors and compare the semantic meaning of a user query against sample documents.
+
+### Embedding Model
+
+`text-embedding-3-small`
+
+### What Was Added
+
+- Sample knowledge documents
+- Query embeddings
+- Document embeddings
+- Cosine similarity calculation
+- Semantic document search
+- Ranking documents based on similarity
+- Embedding caching
+
+### Example
+
+Text:
+
+```text
+Python inheritance allows a child class to reuse another class.
+```
+
+Becomes conceptually:
+
+```text
+[0.021, -0.047, 0.083, ...]
+```
+
+The numbers represent the semantic meaning of the text.
+
+### Learned
+
+- Embeddings
+- Vector representations
+- Embedding models
+- `text-embedding-3-small`
+- Semantic similarity
+- Cosine similarity
+- Query embeddings
+- Document embeddings
+- Semantic search
+- Embedding caching
+- Keyword search vs semantic search
+- LLMs vs embedding models
+- Ranking documents by similarity
+- Foundation of vector databases
+- Foundation of RAG
+
+### Semantic Search Flow
+
+```text
+User Query
+↓
+Embedding Model
+↓
+Query Vector
+↓
+Compare with Document Vectors
+↓
+Cosine Similarity
+↓
+Calculate Similarity Scores
+↓
+Rank Documents
+↓
+Return Most Relevant Documents
+```
+
+### Example Search
+
+User asks:
+
+```text
+How can one Python class reuse another class?
+```
+
+The wording does not need to exactly match the stored document.
+
+The embedding system compares semantic meaning and can identify the document about Python inheritance as the most relevant result.
+
+---
+
+## Milestone 13 — Vector Database
+
+Added ChromaDB as a persistent vector database for storing and searching document embeddings.
+
+Instead of keeping vectors only inside Python memory, embeddings can now be stored persistently and searched using a vector database.
+
+### Vector Database
+
+`ChromaDB`
+
+### What Changed
+
+Before:
+
+```text
+Documents
+↓
+OpenAI Embedding Model
+↓
+Document Embeddings
+↓
+Python Memory
+↓
+Manual Cosine Similarity
+↓
+Sort Results
+↓
+Best Matching Document
+```
+
+Now:
+
+```text
+Documents
+↓
+OpenAI Embedding Model
+↓
+Document Embeddings
+↓
+ChromaDB
+↓
+Vector Index
+↓
+Similarity Search
+↓
+Top Matching Documents
+```
+
+### What Was Added
+
+- ChromaDB
+- Persistent vector storage
+- Chroma `PersistentClient`
+- Chroma collection
+- Document IDs
+- Document metadata
+- Vector indexing
+- Semantic vector search
+- Persistent embeddings
+
+### Learned
+
+- Vector databases
+- ChromaDB
+- Persistent vector storage
+- `PersistentClient`
+- Collections
+- Document IDs
+- Metadata
+- Vector indexing
+- HNSW
+- Cosine distance
+- Query embeddings
+- Nearest-neighbor search
+- Persistent embeddings
+- Semantic retrieval
+- SQLite vs vector databases
+- Foundation for RAG
+
+### Vector Database Structure
+
+```text
+Chroma Collection
+
+Document 1
+├── ID
+├── Original Text
+├── Embedding Vector
+└── Metadata
+
+Document 2
+├── ID
+├── Original Text
+├── Embedding Vector
+└── Metadata
+```
+
+### Architecture
+
+```text
+Documents
+↓
+OpenAI Embedding Model
+↓
+Document Embeddings
+↓
+Chroma Vector Database
+↓
+Vector Index
+```
+
+Semantic search:
+
+```text
+User Query
+↓
+Embedding Model
+↓
+Query Embedding
+↓
+ChromaDB
+↓
+Vector Similarity Search
+↓
+Nearest Documents
+↓
+Return Top Matches
+```
+
+### Database Responsibilities
+
+```text
+SQLite
+↓
+Conversation Memory
+
+ChromaDB
+↓
+Semantic Knowledge / Document Vectors
+```
+
+---
+
+# Upcoming Milestones
+
+## Milestone 14 — RAG
+
+Build document and PDF question answering using Retrieval Augmented Generation.
+
+The application will retrieve relevant documents from the vector database and provide that context to the LLM before generating an answer.
+
+### Planned Flow
+
+```text
+User Question
+↓
+Create Query Embedding
+↓
+Search ChromaDB
+↓
+Retrieve Relevant Documents
+↓
+Combine Documents + User Question
+↓
+Send Context to LLM
+↓
+Generate Grounded Answer
+```
+
+---
+
+## Milestone 15 — Agents
+
+Allow the AI to decide which tools to use and perform multi-step tasks.
+
+---
+
+## Milestone 16 — LangChain
+
+Understand how LangChain simplifies parts of the architecture that were first built manually.
+
+---
+
+## Milestone 17 — LangGraph
+
+Build stateful agent workflows and multi-step execution graphs.
+
+---
+
+## Milestone 18 — MCP
+
+Learn how AI applications connect to tools and external systems using the Model Context Protocol.
+
+---
+
+## Milestone 19 — Deployment
+
+Deploy the chatbot so it can be used outside localhost.
+
+---
+
+# Project Architecture So Far
+
+```text
+                        User
+                         ↓
+                    Chat Interface
+                         ↓
+                       FastAPI
+                         ↓
+            ┌────────────┼────────────┐
+            ↓            ↓            ↓
+         SQLite       OpenAI LLM    Embeddings
+            ↓            ↓            ↓
+      Conversation    Responses      Vectors
+         Memory          ↓            ↓
+                         ↓         ChromaDB
+                         ↓            ↓
+                    Tool Calling   Semantic Search
+                         ↓            ↓
+                    Calculator    Relevant Documents
+```
+
+---
+
+# Goal
+
+The goal of this project is not only to build a chatbot, but to understand how modern AI applications are designed from the ground up.
+
+Each milestone introduces a new AI or backend engineering concept while improving the same application.
