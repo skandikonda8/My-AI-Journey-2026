@@ -254,21 +254,148 @@ Improved control over the chatbot's behavior using structured system prompts.
 - Prompt engineering vs model training
 - Introduction to prompt injection
 
-## Milestone 9 — Streaming Responses
 
-Make AI responses appear gradually instead of waiting for the entire answer.
+## Milestone 9 — Streaming AI Responses
+
+Added real-time streaming so AI responses appear progressively while the model is generating them.
+
+### Learned
+
+- OpenAI response streaming
+- `stream=True`
+- Streaming events
+- `response.output_text.delta`
+- Python generators
+- `yield`
+- FastAPI `StreamingResponse`
+- Browser `ReadableStream`
+- `getReader()`
+- `TextDecoder`
+- Processing response chunks
+- Building and storing the complete streamed response
+- Streaming responses while maintaining SQLite conversation memory
+
+### Architecture
+
+User
+↓
+FastAPI
+↓
+SQLite Conversation History
+↓
+OpenAI Streaming API
+↓
+Text Chunks
+↓
+FastAPI StreamingResponse
+↓
+JavaScript Stream Reader
+↓
+Live Chat Interface
 
 ## Milestone 10 — Structured Outputs
 
-Make the LLM return predictable structured data.
+Added structured AI responses using Pydantic schemas and the OpenAI Responses API.
+
+### Learned
+
+- Free-form text vs structured data
+- Structured Outputs
+- JSON schemas
+- Pydantic output models
+- `client.responses.parse()`
+- `text_format`
+- `response.output_parsed`
+- Typed LLM responses
+- Enum-like constraints using `Literal`
+- Machine-readable vs human-readable AI responses
+- Structured Outputs vs JSON mode
+- Using LLM output inside application logic
+
+### Example Structured Response
+
+```json
+{
+  "topic": "Python decorators",
+  "difficulty": "intermediate",
+  "answer": "Decorators extend the behavior of functions.",
+  "key_points": [
+    "Decorators wrap functions",
+    "They commonly use the @ syntax",
+    "They support reusable behavior"
+  ]
+}
 
 ## Milestone 11 — Tool Calling
 
-Allow the LLM to call Python functions and external APIs.
+Added tool calling directly into the main chatbot workflow.
 
-## Milestone 12 — Embeddings
+The frontend now sends all normal user messages to one `/chat` endpoint. The LLM decides whether it can answer directly or needs to call an available Python tool.
 
-Learn how text is converted into vectors.
+### First Tool
+
+Calculator
+
+Supported operations:
+
+- Addition
+- Subtraction
+- Multiplication
+- Division
+
+### Learned
+
+- Function calling
+- Tool definitions
+- JSON Schema parameters
+- Automatic tool selection
+- `tool_choice`
+- `function_call`
+- Function arguments
+- Python-side tool execution
+- `function_call_output`
+- `call_id`
+- LLM → Tool → LLM workflow
+- Combining tool calling with streaming
+- Keeping tool-routing logic hidden from the frontend
+
+## Milestone 12 — Embeddings and Semantic Search
+
+Added text embeddings and built a basic semantic search system.
+
+The application can now convert text into numerical vectors and compare the semantic meaning of a user query against sample documents.
+
+### Learned
+
+- Embeddings
+- Vector representations
+- Embedding models
+- `text-embedding-3-small`
+- Semantic similarity
+- Cosine similarity
+- Query embeddings
+- Document embeddings
+- Semantic search
+- Embedding caching
+- Keyword search vs semantic search
+- LLMs vs embedding models
+- Foundation of vector databases and RAG
+
+### Semantic Search Flow
+
+User Query
+↓
+Embedding Model
+↓
+Query Vector
+↓
+Compare with Document Vectors
+↓
+Cosine Similarity
+↓
+Rank Documents
+↓
+Return Most Relevant Document
 
 ## Milestone 13 — Vector Database
 
