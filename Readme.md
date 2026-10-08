@@ -330,18 +330,63 @@ Added structured AI responses using Pydantic schemas and the OpenAI Responses AP
 
 Added tool calling directly into the main chatbot workflow.
 
-The frontend now sends all normal user messages to one `/chat` endpoint. The LLM decides whether it can answer directly or needs to call an available Python tool.
+The frontend sends all normal user messages to a single `/chat` endpoint. The LLM decides whether it can answer the question directly or whether it needs to use an available Python tool.
 
-### First Tool
+### What Was Added
 
-Calculator
+- Calculator tool
+- Automatic tool selection
+- Python-side tool execution
+- Tool results sent back to the LLM
+- Tool calling integrated with the existing streaming chatbot
 
-Supported operations:
+### First Tool — Calculator
+
+The calculator currently supports:
 
 - Addition
 - Subtraction
 - Multiplication
 - Division
+
+### Tool Calling Flow
+
+User Message  
+↓  
+Frontend  
+↓  
+`POST /chat`  
+↓  
+FastAPI Backend  
+↓  
+LLM  
+↓  
+LLM decides whether a tool is required  
+↓  
+
+If no tool is required:
+
+LLM  
+↓  
+Generate Response  
+↓  
+Stream Response to Browser  
+
+If a tool is required:
+
+LLM  
+↓  
+Function Call Request  
+↓  
+Python Tool Execution  
+↓  
+Tool Result  
+↓  
+Result Sent Back to LLM  
+↓  
+LLM Generates Final Response  
+↓  
+Stream Response to Browser  
 
 ### Learned
 
@@ -359,11 +404,70 @@ Supported operations:
 - Combining tool calling with streaming
 - Keeping tool-routing logic hidden from the frontend
 
+
 ## Milestone 12 — Embeddings and Semantic Search
 
 Added text embeddings and built a basic semantic search system.
 
-The application can now convert text into numerical vectors and compare the semantic meaning of a user query against sample documents.
+The application can now convert text into numerical vectors and compare the semantic meaning of a user's query against sample documents.
+
+### What Was Added
+
+- OpenAI embedding model
+- Sample knowledge documents
+- Query embeddings
+- Document embeddings
+- Cosine similarity calculation
+- Semantic document search
+- Ranking documents based on similarity
+
+### Embedding Model
+
+Used:
+
+`text-embedding-3-small`
+
+The embedding model converts text into a numerical vector representing the semantic meaning of the text.
+
+Example:
+
+Text:
+
+`Python inheritance allows a child class to reuse another class.`
+
+Becomes conceptually:
+
+`[0.021, -0.047, 0.083, ...]`
+
+These vectors can then be mathematically compared.
+
+### Semantic Search Flow
+
+User Query  
+↓  
+Embedding Model  
+↓  
+Query Vector  
+↓  
+Compare Query Vector with Document Vectors  
+↓  
+Cosine Similarity  
+↓  
+Calculate Similarity Scores  
+↓  
+Rank Documents  
+↓  
+Return Most Relevant Documents  
+
+### Example
+
+User asks:
+
+`How can one Python class reuse another class?`
+
+The wording does not have to exactly match the stored document.
+
+The embedding system compares semantic meaning and can identify the document about Python inheritance as the most relevant result.
 
 ### Learned
 
@@ -379,23 +483,9 @@ The application can now convert text into numerical vectors and compare the sema
 - Embedding caching
 - Keyword search vs semantic search
 - LLMs vs embedding models
-- Foundation of vector databases and RAG
-
-### Semantic Search Flow
-
-User Query
-↓
-Embedding Model
-↓
-Query Vector
-↓
-Compare with Document Vectors
-↓
-Cosine Similarity
-↓
-Rank Documents
-↓
-Return Most Relevant Document
+- Ranking documents by similarity
+- Foundation of vector databases
+- Foundation of RAG
 
 ## Milestone 13 — Vector Database
 
