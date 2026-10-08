@@ -236,7 +236,7 @@ The local SQLite database is excluded from GitHub because it may contain convers
 
 ## Milestone 8 — Prompt Engineering
 
-## Milestone 8 — Prompt Engineering
+
 
 Improved control over the chatbot's behavior using structured system prompts.
 
@@ -330,63 +330,18 @@ Added structured AI responses using Pydantic schemas and the OpenAI Responses AP
 
 Added tool calling directly into the main chatbot workflow.
 
-The frontend sends all normal user messages to a single `/chat` endpoint. The LLM decides whether it can answer the question directly or whether it needs to use an available Python tool.
+The frontend now sends all normal user messages to one `/chat` endpoint. The LLM decides whether it can answer directly or needs to call an available Python tool.
 
-### What Was Added
+### First Tool
 
-- Calculator tool
-- Automatic tool selection
-- Python-side tool execution
-- Tool results sent back to the LLM
-- Tool calling integrated with the existing streaming chatbot
+Calculator
 
-### First Tool — Calculator
-
-The calculator currently supports:
+Supported operations:
 
 - Addition
 - Subtraction
 - Multiplication
 - Division
-
-### Tool Calling Flow
-
-User Message  
-↓  
-Frontend  
-↓  
-`POST /chat`  
-↓  
-FastAPI Backend  
-↓  
-LLM  
-↓  
-LLM decides whether a tool is required  
-↓  
-
-If no tool is required:
-
-LLM  
-↓  
-Generate Response  
-↓  
-Stream Response to Browser  
-
-If a tool is required:
-
-LLM  
-↓  
-Function Call Request  
-↓  
-Python Tool Execution  
-↓  
-Tool Result  
-↓  
-Result Sent Back to LLM  
-↓  
-LLM Generates Final Response  
-↓  
-Stream Response to Browser  
 
 ### Learned
 
@@ -404,119 +359,27 @@ Stream Response to Browser
 - Combining tool calling with streaming
 - Keeping tool-routing logic hidden from the frontend
 
+### Architecture
 
-## Milestone 12 — Embeddings and Semantic Search
-
-Added text embeddings and built a basic semantic search system.
-
-The application can now convert text into numerical vectors and compare the semantic meaning of a user's query against sample documents.
-
-### What Was Added
-
-- OpenAI embedding model
-- Sample knowledge documents
-- Query embeddings
-- Document embeddings
-- Cosine similarity calculation
-- Semantic document search
-- Ranking documents based on similarity
-
-### Embedding Model
-
-Used:
-
-`text-embedding-3-small`
-
-The embedding model converts text into a numerical vector representing the semantic meaning of the text.
-
-Example:
-
-Text:
-
-`Python inheritance allows a child class to reuse another class.`
-
-Becomes conceptually:
-
-`[0.021, -0.047, 0.083, ...]`
-
-These vectors can then be mathematically compared.
-
-### Semantic Search Flow
-
-User Query  
-↓  
-Embedding Model  
-↓  
-Query Vector  
-↓  
-Compare Query Vector with Document Vectors  
-↓  
-Cosine Similarity  
-↓  
-Calculate Similarity Scores  
-↓  
-Rank Documents  
-↓  
-Return Most Relevant Documents  
-
-### Example
-
-User asks:
-
-`How can one Python class reuse another class?`
-
-The wording does not have to exactly match the stored document.
-
-The embedding system compares semantic meaning and can identify the document about Python inheritance as the most relevant result.
-
-### Learned
-
-- Embeddings
-- Vector representations
-- Embedding models
-- `text-embedding-3-small`
-- Semantic similarity
-- Cosine similarity
-- Query embeddings
-- Document embeddings
-- Semantic search
-- Embedding caching
-- Keyword search vs semantic search
-- LLMs vs embedding models
-- Ranking documents by similarity
-- Foundation of vector databases
-- Foundation of RAG
-
-## Milestone 13 — Vector Database
-
-Store and retrieve embeddings.
-
-## Milestone 14 — RAG
-
-Build document/PDF question answering using retrieval augmented generation.
-
-## Milestone 15 — Agents
-
-Allow the AI to decide which tools to use and perform multi-step tasks.
-
-## Milestone 16 — LangChain
-
-Understand how LangChain simplifies parts of our existing architecture.
-
-## Milestone 17 — LangGraph
-
-Build stateful agent workflows and multi-step execution graphs.
-
-## Milestone 18 — MCP
-
-Learn how AI applications connect to tools and external systems using the Model Context Protocol.
-
-## Milestone 19 — Deployment
-
-Deploy the chatbot so it can be used outside localhost.
-
-# Goal
-
-The goal of this project is not only to build a chatbot, but to understand how modern AI applications are designed from the ground up.
-
-Each milestone introduces a new AI or backend engineering concept while improving the same application.
+```text
+User
+↓
+Frontend
+↓
+POST /chat
+↓
+FastAPI
+↓
+LLM
+↓
+Does the question require a tool?
+↓
+Yes → Python Tool
+↓
+Tool Result
+↓
+LLM
+↓
+Final Response
+↓
+Browser
