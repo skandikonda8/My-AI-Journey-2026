@@ -2681,24 +2681,646 @@ Stores the complete message history produced during graph execution.
 
 ---
 
-## Milestone 18 — MCP
+## Milestone 18 — Model Context Protocol (MCP)
 
-Next: learn the Model Context Protocol and understand how AI applications can connect to external systems through:
+Added a Model Context Protocol server to the AI application.
 
-- MCP Servers
-- MCP Clients
-- MCP Tools
-- Resources
-- Prompts
+The existing calculator and ChromaDB knowledge-search capabilities can now be exposed through a standard protocol that MCP-compatible clients can discover and use.
+
+### What Is MCP?
+
+MCP stands for:
+
+```text
+Model Context Protocol
+```
+
+MCP provides a standard way for AI applications to connect with external capabilities.
+
+Instead of every AI application creating a custom integration for every tool:
+
+```text
+AI Application
+↓
+Custom API Integration
+↓
+External Tool
+```
+
+MCP introduces a standard communication layer:
+
+```text
+AI Application
+↓
+MCP Client
+↓
+MCP Protocol
+↓
+MCP Server
+↓
+Tool / Resource / External System
+```
+
+### Why MCP?
+
+Without MCP:
+
+```text
+Application A
+↓
+Custom Tool Integration
+
+Application B
+↓
+Another Custom Integration
+
+Application C
+↓
+Another Custom Integration
+```
+
+With MCP:
+
+```text
+                 MCP Server
+                /    |     \
+               /     |      \
+              ↓      ↓       ↓
+           Client  Client   Client
+```
+
+Multiple MCP-compatible clients can discover and use the capabilities exposed by the same MCP server.
+
+### MCP Server Added
+
+Created:
+
+```python
+mcp_server = MCPServer(
+    "AI Journey MCP Server"
+)
+```
+
+The MCP server runs alongside the existing FastAPI application.
+
+### MCP Capabilities
+
+The MCP server currently exposes:
+
+```text
+Tools
+├── calculator
+└── search_knowledge
+
+Resources
+└── ai-journey://knowledge
+
+Prompts
+└── explain_topic
+```
+
+### MCP Tools
+
+Tools allow an MCP client to request actions.
+
+#### Calculator Tool
+
+```python
+@mcp_server.tool(
+    name="calculator"
+)
+def mcp_calculator(
+    operation: str,
+    a: float,
+    b: float
+) -> dict:
+```
+
+The MCP calculator reuses the existing Python function:
+
+```text
+MCP Client
+↓
+calculator MCP Tool
+↓
+calculate()
+↓
+Result
+```
+
+### Knowledge Search Tool
+
+Added:
+
+```python
+@mcp_server.tool(
+    name="search_knowledge"
+)
+def mcp_search_knowledge(
+    query: str
+) -> dict:
+```
+
+This reuses the existing semantic-search pipeline:
+
+```text
+MCP Client
+↓
+search_knowledge
+↓
+OpenAI Embeddings
+↓
+Query Vector
+↓
+ChromaDB
+↓
+Relevant Documents
+↓
+MCP Result
+```
+
+### Tool Schema Generation
+
+Before MCP, manual tools required JSON schemas.
+
+Example:
+
+```text
+Tool Name
++
+Description
++
+Properties
++
+Required Fields
++
+Types
+```
+
+With MCP:
+
+```python
+def mcp_calculator(
+    operation: str,
+    a: float,
+    b: float
+):
+```
+
+The MCP SDK can derive the tool schema from:
+
+```text
+Function Name
++
+Type Hints
++
+Docstring
+```
+
+### MCP Resources
+
+MCP resources expose information that clients can read.
+
+Added:
+
+```text
+ai-journey://knowledge
+```
+
+The resource returns the knowledge currently used by the AI Journey application.
+
+```python
+@mcp_server.resource(
+    "ai-journey://knowledge"
+)
+def mcp_knowledge_resource():
+```
+
+Flow:
+
+```text
+MCP Client
+↓
+Read Resource
+↓
+ai-journey://knowledge
+↓
+Knowledge Documents
+```
+
+### MCP Prompts
+
+MCP servers can also expose reusable prompts.
+
+Added:
+
+```text
+explain_topic
+```
+
+Example:
+
+```python
+@mcp_server.prompt()
+def explain_topic(
+    topic: str
+):
+```
+
+A client can discover this prompt and provide:
+
+```text
+topic = "RAG"
+```
+
+The server returns a reusable prompt for explaining that topic.
+
+### MCP Server Transport
+
+The server uses:
+
+```text
+Streamable HTTP
+```
+
+The MCP application is created using:
+
+```python
+mcp_http_app = (
+    mcp_server.streamable_http_app(
+        streamable_http_path="/",
+        stateless_http=True,
+        json_response=True
+    )
+)
+```
+
+### MCP Endpoint
+
+The MCP application is mounted under:
+
+```text
+/mcp
+```
+
+Local MCP URL:
+
+```text
+http://127.0.0.1:8000/mcp/
+```
+
+### FastAPI + MCP
+
+The project now contains two communication styles.
+
+Normal application APIs:
+
+```text
+/chat
+/rag
+/agent
+/langchain/agent
+/langgraph/agent
+```
+
+MCP protocol:
+
+```text
+/mcp/
+```
+
+Architecture:
+
+```text
+                    FastAPI Application
+                           ↓
+            ┌──────────────┴───────────────┐
+            ↓                              ↓
+       REST Endpoints                  MCP Server
+            ↓                              ↓
+ /chat /rag /agent ...                  /mcp/
+                                           ↓
+                              ┌────────────┼────────────┐
+                              ↓            ↓            ↓
+                           Tools       Resources      Prompts
+```
+
+### MCP Server Lifespan
+
+Because the MCP application is mounted inside FastAPI, the MCP session manager is started through the FastAPI lifespan.
+
+```python
+@asynccontextmanager
+async def app_lifespan(
+    app: FastAPI
+):
+    async with (
+        mcp_server
+        .session_manager
+        .run()
+    ):
+        yield
+```
+
+Then:
+
+```python
+app = FastAPI(
+    lifespan=app_lifespan
+)
+```
+
+### MCP Status Endpoint
+
+Added:
+
+```text
+GET /mcp-status
+```
+
+This gives a simple REST view of the MCP configuration.
+
+Example:
+
+```json
+{
+  "server": "AI Journey MCP Server",
+  "transport": "Streamable HTTP",
+  "endpoint": "/mcp/",
+  "tools": [
+    "calculator",
+    "search_knowledge"
+  ],
+  "resources": [
+    "ai-journey://knowledge"
+  ],
+  "prompts": [
+    "explain_topic"
+  ]
+}
+```
+
+### Tool Discovery
+
+A major MCP concept is discovery.
+
+The client does not need the application's Python code.
+
+Instead:
+
+```text
+MCP Client
+↓
+Connect To MCP Server
+↓
+tools/list
+↓
+Server Describes Available Tools
+↓
+Client Discovers Capabilities
+```
+
+In this project the client can discover:
+
+```text
+calculator
+search_knowledge
+```
+
+### Resource Discovery
+
+```text
+MCP Client
+↓
+resources/list
+↓
+ai-journey://knowledge
+```
+
+### Prompt Discovery
+
+```text
+MCP Client
+↓
+prompts/list
+↓
+explain_topic
+```
+
+### MCP Inspector
+
+The MCP Inspector can be used to inspect and test the MCP server.
+
+List tools:
+
+```bash
+npx @modelcontextprotocol/inspector --cli \
+  --transport http \
+  --server-url http://127.0.0.1:8000/mcp/ \
+  --method tools/list
+```
+
+List resources:
+
+```bash
+npx @modelcontextprotocol/inspector --cli \
+  --transport http \
+  --server-url http://127.0.0.1:8000/mcp/ \
+  --method resources/list
+```
+
+List prompts:
+
+```bash
+npx @modelcontextprotocol/inspector --cli \
+  --transport http \
+  --server-url http://127.0.0.1:8000/mcp/ \
+  --method prompts/list
+```
+
+### Tool Calling vs MCP
+
+Normal Tool Calling:
+
+```text
+LLM
+↓
+Tool Schema Defined Inside Application
+↓
+Python Function
+```
+
+MCP:
+
+```text
+AI Host
+↓
+MCP Client
+↓
+MCP Server
+↓
+Discover Tools
+↓
+Call Tool
+↓
+Receive Result
+```
+
+The key difference is:
+
+```text
+Tool Calling
+=
+How a model requests a function
+
+MCP
+=
+Standard protocol for exposing and discovering
+tools, resources, and prompts across applications
+```
+
+### MCP vs REST API
+
+REST:
+
+```text
+Client already knows:
+
+POST /weather
+POST /search
+POST /calculate
+```
+
+MCP:
+
+```text
+Client connects
+↓
+Discovers available capabilities
+↓
+Chooses tool/resource/prompt
+↓
+Uses standard MCP messages
+```
+
+### Current Architecture
+
+```text
+                              USER
+                               ↓
+                            FastAPI
+                               ↓
+      ┌──────────────┬─────────┼─────────┬───────────────┐
+      ↓              ↓         ↓         ↓               ↓
+    /chat           /rag     /agent  /langgraph/agent   /mcp/
+      ↓              ↓         ↓         ↓               ↓
+ Streaming          RAG     Manual     LangGraph       MCP Server
+   Chat                      Agent       Agent            ↓
+                                                        ├── calculator
+                                                        ├── search_knowledge
+                                                        ├── knowledge resource
+                                                        └── explain_topic prompt
+```
+
+### Agentic AI Architecture Progression
+
+```text
+Milestone 11
+Tool Calling
+↓
+LLM can request functions
+
+
+Milestone 15
+Agent
+↓
+LLM can repeatedly choose tools
+
+
+Milestone 16
+LangChain
+↓
+Framework manages agent orchestration
+
+
+Milestone 17
+LangGraph
+↓
+Graph manages state and workflow
+
+
+Milestone 18
+MCP
+↓
+Capabilities can be exposed through
+a standard protocol to other AI clients
+```
+
+### Important Variables
+
+`mcp_server`
+
+Stores the MCP server.
+
+`mcp_calculator`
+
+Calculator capability exposed through MCP.
+
+`mcp_search_knowledge`
+
+Knowledge-search capability exposed through MCP.
+
+`mcp_knowledge_resource`
+
+Resource exposing project knowledge.
+
+`explain_topic`
+
+Reusable MCP prompt.
+
+`mcp_http_app`
+
+ASGI application that handles MCP Streamable HTTP requests.
+
+`app_lifespan`
+
+Starts and stops the MCP session manager with FastAPI.
+
+### Learned
+
+- Model Context Protocol
+- MCP servers
+- MCP clients
+- MCP tools
+- MCP resources
+- MCP prompts
 - Tool discovery
-- External service integration
+- Resource discovery
+- Prompt discovery
+- Streamable HTTP
+- MCP tool schemas
+- Reusing existing Python functions as MCP tools
+- FastAPI + MCP integration
+- MCP server lifecycle
+- Standardized AI tool integration
+- Tool calling vs MCP
+- REST APIs vs MCP
+- External capability exposure
 
 ---
 
-## Milestone 18 — MCP
+## Milestone 19 — Guardrails
 
-Learn how AI applications connect to tools and external systems using the Model Context Protocol.
+Next: add guardrails around the AI system, including:
 
+- Input validation
+- Output validation
+- Tool restrictions
+- Prompt-injection protection concepts
+- Dangerous tool-call prevention
+- Agent execution limits
+- Retrieval validation
+- Structured safety checks
 ---
 
 ## Milestone 19 — Deployment
