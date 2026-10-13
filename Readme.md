@@ -634,37 +634,830 @@ Semantic Knowledge / Document Vectors
 
 ---
 
-# Upcoming Milestones
 
-## Milestone 14 — RAG
+## Milestone 14 — Retrieval Augmented Generation (RAG)
 
-Build document and PDF question answering using Retrieval Augmented Generation.
+Connected the ChromaDB retrieval system to the LLM and built the first Retrieval Augmented Generation workflow.
 
-The application will retrieve relevant documents from the vector database and provide that context to the LLM before generating an answer.
+The application can now retrieve relevant documents from the vector database and provide those documents to the LLM as context before generating the final answer.
 
-### Planned Flow
+This allows the model to answer questions using retrieved knowledge instead of relying only on its general training.
+
+### What Changed
+
+Before RAG:
 
 ```text
 User Question
+↓
+Embedding Model
+↓
+Query Vector
+↓
+ChromaDB
+↓
+Relevant Documents
+↓
+Return Documents
+```
+
+This was semantic search.
+
+Now:
+
+```text
+User Question
+↓
+Embedding Model
+↓
+Query Vector
+↓
+ChromaDB
+↓
+Retrieve Relevant Documents
+↓
+Build Context
+↓
+Context + User Question
+↓
+LLM
+↓
+Grounded Answer
+```
+
+This is Retrieval Augmented Generation.
+
+### RAG Meaning
+
+RAG stands for:
+
+```text
+R = Retrieval
+    Retrieve relevant information
+
+A = Augmented
+    Add retrieved information to the prompt
+
+G = Generation
+    Generate the final answer using the LLM
+```
+
+### What Was Added
+
+- `RAGRequest`
+- Dedicated `/rag` endpoint
+- Reusable document retrieval function
+- Retrieved document context
+- Context building
+- RAG-specific system prompt
+- Context + question prompt construction
+- LLM answer generation from retrieved knowledge
+- Grounded responses
+- Retrieval transparency by returning retrieved documents
+
+### New Request Model
+
+The RAG endpoint uses:
+
+```python
+class RAGRequest(BaseModel):
+    query: str
+```
+
+Example request:
+
+```json
+{
+  "query": "How does inheritance work in Python?"
+}
+```
+
+### Document Retrieval Function
+
+Created a reusable function:
+
+```text
+retrieve_documents()
+```
+
+This function performs:
+
+```text
+User Query
 ↓
 Create Query Embedding
 ↓
 Search ChromaDB
 ↓
-Retrieve Relevant Documents
+Retrieve Similar Documents
 ↓
-Combine Documents + User Question
+Calculate Similarity Information
 ↓
-Send Context to LLM
+Return Retrieved Documents
+```
+
+Both semantic search and RAG can now reuse the same retrieval logic.
+
+### Why Retrieval Was Moved Into a Function
+
+Before:
+
+```text
+/embeddings/search
 ↓
-Generate Grounded Answer
+Create embedding
+↓
+Search Chroma
+↓
+Extract documents
+↓
+Format results
+```
+
+If the same logic was copied into `/rag`, the code would be duplicated.
+
+Now:
+
+```text
+                    retrieve_documents()
+                    ↑                ↑
+                    │                │
+      /embeddings/search           /rag
+```
+
+This keeps the retrieval logic reusable and easier to maintain.
+
+### Context Building
+
+After the relevant documents are retrieved, they are combined into one context string.
+
+Example:
+
+```text
+Document 1:
+Python inheritance allows a child class to reuse
+properties and methods from a parent class.
+
+Document 2:
+FastAPI is a Python web framework used to build APIs
+and backend services.
+
+Document 3:
+SQLite is a lightweight relational database.
+```
+
+The combined information is stored in:
+
+```text
+context
+```
+
+### RAG Input
+
+The final prompt sent to the LLM contains both the retrieved context and the original user question.
+
+Example:
+
+```text
+CONTEXT:
+
+Document 1:
+Python inheritance allows a child class to reuse
+properties and methods from a parent class.
+
+Document 2:
+FastAPI is a Python web framework used to build APIs.
+
+USER QUESTION:
+
+How does inheritance work in Python?
+```
+
+This combined input is stored in:
+
+```text
+rag_input
+```
+
+### RAG System Prompt
+
+A separate system prompt was added for RAG.
+
+The model is instructed to:
+
+- Use the provided context
+- Answer using retrieved information
+- Avoid inventing unsupported information
+- Say when the context does not contain enough information
+- Keep answers beginner-friendly
+
+### RAG Endpoint
+
+Added:
+
+```text
+POST /rag
+```
+
+Example request:
+
+```json
+{
+  "query": "How does inheritance work in Python?"
+}
+```
+
+### RAG Execution Flow
+
+```text
+POST /rag
+↓
+RAGRequest
+↓
+request.query
+↓
+query_text
+↓
+retrieve_documents()
+↓
+create_embedding()
+↓
+OpenAI Embedding Model
+↓
+query_embedding
+↓
+ChromaDB
+↓
+search_results
+↓
+retrieved_documents
+↓
+Build Context
+↓
+context
+↓
+Build RAG Input
+↓
+rag_input
+↓
+OpenAI Responses API
+↓
+LLM
+↓
+llm_response
+↓
+output_text
+↓
+answer
+↓
+Return JSON Response
+```
+
+### Example Response
+
+```json
+{
+  "query": "How does inheritance work in Python?",
+  "answer": "Python inheritance allows a child class to reuse properties and methods from a parent class.",
+  "retrieved_documents": [
+    {
+      "id": "doc_1",
+      "document": "Python inheritance allows a child class to reuse properties and methods from a parent class.",
+      "metadata": {
+        "topic": "python",
+        "category": "programming"
+      },
+      "similarity": 0.89
+    }
+  ]
+}
+```
+
+### Semantic Search vs RAG
+
+Semantic Search:
+
+```text
+Question
+↓
+Embedding
+↓
+Vector Database
+↓
+Relevant Documents
+```
+
+Output:
+
+```text
+Documents
+```
+
+RAG:
+
+```text
+Question
+↓
+Embedding
+↓
+Vector Database
+↓
+Relevant Documents
+↓
+LLM
+↓
+Generated Answer
+```
+
+Output:
+
+```text
+Grounded Natural-Language Answer
+```
+
+### Main Variables
+
+`query_text`
+
+Stores the user's original question.
+
+`query_embedding`
+
+Stores the numerical vector representing the question.
+
+`search_results`
+
+Stores the raw ChromaDB search result.
+
+`retrieved_documents`
+
+Stores the cleaned list of relevant documents returned from ChromaDB.
+
+`context_parts`
+
+Stores individual formatted document strings.
+
+`context`
+
+Stores all retrieved documents combined into one string.
+
+`rag_input`
+
+Stores the retrieved context together with the user's question.
+
+`llm_response`
+
+Stores the response object returned by the LLM.
+
+`answer`
+
+Stores the final generated RAG answer.
+
+### Learned
+
+- Retrieval Augmented Generation
+- RAG architecture
+- Retrieval
+- Augmentation
+- Generation
+- Context retrieval
+- Context construction
+- Prompt augmentation
+- Grounded generation
+- ChromaDB + LLM integration
+- Reusable retrieval functions
+- Avoiding duplicated backend logic
+- Semantic search vs RAG
+- Using retrieved knowledge as LLM context
+- RAG-specific system prompts
+- Reducing unsupported answers
+- Returning sources alongside generated answers
+- Foundation for document question answering
+
+### Architecture
+
+```text
+                    User Question
+                          ↓
+                       FastAPI
+                          ↓
+                  Create Query Embedding
+                          ↓
+               OpenAI Embedding Model
+                          ↓
+                    Query Vector
+                          ↓
+                       ChromaDB
+                          ↓
+                 Similarity Search
+                          ↓
+                Relevant Documents
+                          ↓
+                    Build Context
+                          ↓
+             Context + User Question
+                          ↓
+                    OpenAI LLM
+                          ↓
+                 Grounded Answer
+```
+
+### Current AI Application Architecture
+
+```text
+                         User
+                          ↓
+                     Web Interface
+                          ↓
+                        FastAPI
+                          ↓
+        ┌─────────────────┼──────────────────┐
+        ↓                 ↓                  ↓
+     SQLite           Tool Calling       RAG Pipeline
+        ↓                 ↓                  ↓
+ Conversation        Calculator         Embeddings
+   Memory                                    ↓
+                                          ChromaDB
+                                            ↓
+                                     Relevant Documents
+                                            ↓
+                                           LLM
+                                            ↓
+                                     Grounded Answer
 ```
 
 ---
 
-## Milestone 15 — Agents
 
-Allow the AI to decide which tools to use and perform multi-step tasks.
+
+## Milestone 15 — Basic AI Agent
+
+Added a multi-step AI agent that can decide which tools are needed, execute those tools, inspect their results, and continue until the task is complete.
+
+This milestone extends simple tool calling into an iterative agent workflow.
+
+### What Is an Agent?
+
+An AI agent can do more than answer a question once.
+
+It can:
+
+```text
+Decide
+↓
+Take Action
+↓
+Observe the Result
+↓
+Decide Again
+↓
+Repeat
+↓
+Final Answer
+```
+
+### Agent Formula
+
+```text
+Agent
+=
+LLM
++
+Tools
++
+Decision Making
++
+Execution Loop
++
+State / Context
+```
+
+### Available Agent Tools
+
+The agent currently has two tools.
+
+#### 1. Calculator
+
+Used for:
+
+- Addition
+- Subtraction
+- Multiplication
+- Division
+
+#### 2. Knowledge Search
+
+Used for:
+
+- Searching the local ChromaDB knowledge base
+- Retrieving semantically relevant documents
+- Returning retrieved information to the agent
+
+### What Was Added
+
+- `AgentRequest`
+- `AGENT_SYSTEM_PROMPT`
+- `MAX_AGENT_STEPS`
+- `search_knowledge()`
+- `KNOWLEDGE_SEARCH_TOOL`
+- `AGENT_TOOLS`
+- `execute_agent_tool()`
+- `/agent` endpoint
+- Multi-step agent loop
+- Dynamic tool selection
+- Multiple tool calls
+- Tool result observation
+- Agent execution trace
+- Maximum-step protection
+
+### Agent Request Model
+
+```python
+class AgentRequest(BaseModel):
+    conversation_id: str
+    message: str
+```
+
+Example request:
+
+```json
+{
+  "conversation_id": "agent-test-1",
+  "message": "Search the knowledge base for embeddings and multiply the number of returned documents by 10."
+}
+```
+
+### Tool Router
+
+The model does not directly execute Python functions.
+
+It requests a tool, and the backend routes that request.
+
+```text
+LLM Tool Request
+↓
+execute_agent_tool()
+↓
+Check Tool Name
+↓
+┌────────────────────┬─────────────────────────┐
+↓                    ↓
+calculator       search_knowledge
+↓                    ↓
+calculate()      retrieve_documents()
+↓                    ↓
+Result           ChromaDB Results
+```
+
+### Agent Loop
+
+The main difference between normal tool calling and an agent is the loop.
+
+```text
+LLM
+↓
+Decide
+↓
+Use Tool
+↓
+Observe Tool Result
+↓
+Decide Again
+↓
+Use Another Tool If Needed
+↓
+Repeat
+↓
+Final Answer
+```
+
+The agent continues until:
+
+```text
+No more tools are needed
+```
+
+or:
+
+```text
+MAX_AGENT_STEPS is reached
+```
+
+### Example Multi-Step Task
+
+User request:
+
+```text
+Search the knowledge base for embeddings
+and multiply the number of returned documents by 10.
+```
+
+Possible execution:
+
+```text
+STEP 1
+
+LLM
+↓
+search_knowledge
+↓
+ChromaDB
+↓
+3 documents returned
+
+
+STEP 2
+
+LLM sees:
+match_count = 3
+↓
+calculator
+↓
+3 × 10
+↓
+30
+
+
+STEP 3
+
+LLM
+↓
+No more tools needed
+↓
+Final Answer
+```
+
+### Function Call Flow
+
+```text
+agent_response.output
+↓
+Find function_call items
+↓
+tool_call
+↓
+execute_agent_tool()
+↓
+tool_result
+↓
+function_call_output
+↓
+Add result to agent_input
+↓
+Call LLM Again
+```
+
+### Agent State
+
+The variable:
+
+```text
+agent_input
+```
+
+stores the information needed for the next agent step.
+
+It may contain:
+
+```text
+Previous Conversation
++
+Current User Message
++
+Model Tool Requests
++
+Tool Results
+```
+
+This allows the agent to continue from what already happened.
+
+### Tool Trace
+
+The endpoint also returns:
+
+```text
+tool_trace
+```
+
+This makes the tool execution easier to inspect.
+
+Example:
+
+```json
+{
+  "tool_trace": [
+    {
+      "step": 1,
+      "tool": "search_knowledge"
+    },
+    {
+      "step": 2,
+      "tool": "calculator"
+    }
+  ]
+}
+```
+
+### Tool Calling vs Agent
+
+Milestone 11:
+
+```text
+User
+↓
+LLM
+↓
+Tool
+↓
+LLM
+↓
+Answer
+```
+
+Milestone 15:
+
+```text
+User
+↓
+LLM
+↓
+Tool
+↓
+LLM
+↓
+Another Tool
+↓
+LLM
+↓
+Another Action If Needed
+↓
+Final Answer
+```
+
+The important difference is the repeated decision loop.
+
+### Full Agent Architecture
+
+```text
+                    User
+                     ↓
+                POST /agent
+                     ↓
+                AgentRequest
+                     ↓
+                 agent_input
+                     ↓
+              ┌──────────────┐
+              │  AGENT LOOP  │
+              └──────────────┘
+                     ↓
+                    LLM
+                     ↓
+              Tool Required?
+                /         \
+              No           Yes
+              ↓             ↓
+        Final Answer    function_call
+                            ↓
+                   execute_agent_tool()
+                     /             \
+                    /               \
+             calculator       search_knowledge
+                 ↓                  ↓
+            calculate()      ChromaDB Retrieval
+                 ↓                  ↓
+              result             result
+                    \             /
+                     \           /
+                  function_call_output
+                           ↓
+                      agent_input
+                           ↓
+                      NEXT STEP
+```
+
+### Learned
+
+- AI agents
+- Agentic AI basics
+- Tool-using agents
+- Multi-step execution
+- Agent loops
+- Dynamic decision making
+- Tool routing
+- Multiple tools
+- Function calling
+- `function_call`
+- `function_call_output`
+- `call_id`
+- Maintaining agent context
+- Tool result observation
+- Maximum execution limits
+- Reusing RAG retrieval as an agent tool
+- Difference between tool calling and agents
+- Decide → Act → Observe → Repeat
+
+--- 
 
 ---
 
@@ -692,29 +1485,7 @@ Deploy the chatbot so it can be used outside localhost.
 
 ---
 
-# Project Architecture So Far
 
-```text
-                        User
-                         ↓
-                    Chat Interface
-                         ↓
-                       FastAPI
-                         ↓
-            ┌────────────┼────────────┐
-            ↓            ↓            ↓
-         SQLite       OpenAI LLM    Embeddings
-            ↓            ↓            ↓
-      Conversation    Responses      Vectors
-         Memory          ↓            ↓
-                         ↓         ChromaDB
-                         ↓            ↓
-                    Tool Calling   Semantic Search
-                         ↓            ↓
-                    Calculator    Relevant Documents
-```
-
----
 
 # Goal
 
