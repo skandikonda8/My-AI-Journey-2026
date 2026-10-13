@@ -5,6 +5,10 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Literal
 
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
+
 import chromadb
 import json
 import os
@@ -12,7 +16,7 @@ import sqlite3
 
 
 # --------------------------------
-# 1. Environment + Clients
+# 1. Setup
 # --------------------------------
 
 load_dotenv()
@@ -23,24 +27,16 @@ client = OpenAI(
 
 app = FastAPI()
 
-
-# --------------------------------
-# 2. Configuration
-# --------------------------------
-
 DATABASE_NAME = "chatbot.db"
-
+CHAT_MODEL = "gpt-6-luna"
 EMBEDDING_MODEL = "text-embedding-3-small"
-
 CHROMA_PATH = "./chroma_db"
-
 CHROMA_COLLECTION_NAME = "ai_journey_documents"
-
 MAX_AGENT_STEPS = 5
 
 
 # --------------------------------
-# 3. Chroma Vector Database
+# 2. ChromaDB
 # --------------------------------
 
 chroma_client = chromadb.PersistentClient(
@@ -61,7 +57,7 @@ vector_collection = (
 
 
 # --------------------------------
-# 4. System Prompts
+# 3. Prompts
 # --------------------------------
 
 SYSTEM_PROMPT = """
@@ -74,7 +70,6 @@ Help the user understand topics clearly and accurately.
 STYLE:
 Use simple, clean plain text.
 Do not use Markdown formatting.
-Do not use #, ##, ###, **, backticks, or Markdown bullet syntax.
 Use normal sentences, short paragraphs, and simple numbering when needed.
 Keep answers concise unless the user asks for more detail.
 Use examples when they improve understanding.
@@ -153,8 +148,28 @@ Do not invent tool results.
 """
 
 
+LANGCHAIN_AGENT_PROMPT = """
+You are a helpful AI agent.
+
+Use the available tools whenever they are needed.
+
+Use the calculator tool for arithmetic.
+
+Use the search_knowledge tool when the user asks about information
+that may exist in the local knowledge base.
+
+You may use multiple tools across multiple steps when necessary.
+
+After receiving a tool result, decide whether another tool is needed.
+
+When you have enough information, provide a clear final answer.
+
+Do not invent tool results.
+"""
+
+
 # --------------------------------
-# 5. Initialize SQLite Database
+# 4. SQLite Database
 # --------------------------------
 
 def initialize_database():
@@ -191,55 +206,7 @@ initialize_database()
 
 
 # --------------------------------
-# 6. Request / Response Models
-# --------------------------------
-
-class ChatRequest(BaseModel):
-
-    conversation_id: str
-
-    message: str
-
-
-class EmbeddingSearchRequest(BaseModel):
-
-    query: str
-
-
-class RAGRequest(BaseModel):
-
-    query: str
-
-
-class AgentRequest(BaseModel):
-
-    conversation_id: str
-
-    message: str
-
-
-class ClearRequest(BaseModel):
-
-    conversation_id: str
-
-
-class StructuredChatResponse(BaseModel):
-
-    topic: str
-
-    difficulty: Literal[
-        "beginner",
-        "intermediate",
-        "advanced"
-    ]
-
-    answer: str
-
-    key_points: list[str]
-
-
-# --------------------------------
-# 7. Save Message
+# 5. Save Message
 # --------------------------------
 
 def save_message(
@@ -280,6 +247,7 @@ def save_message(
 
             content
         )
+
     )
 
     connection.commit()
@@ -288,7 +256,7 @@ def save_message(
 
 
 # --------------------------------
-# 8. Get Conversation History
+# 6. Get Conversation History
 # --------------------------------
 
 def get_conversation_history(
@@ -318,6 +286,7 @@ def get_conversation_history(
         (
             conversation_id,
         )
+
     )
 
     rows = cursor.fetchall()
@@ -326,13 +295,15 @@ def get_conversation_history(
 
     conversation_history = []
 
-    for row in rows:
+    for role, content in rows:
 
         conversation_history.append({
 
-            "role": row[0],
+            "role":
+                role,
 
-            "content": row[1]
+            "content":
+                content
 
         })
 
@@ -340,7 +311,59 @@ def get_conversation_history(
 
 
 # --------------------------------
-# 9. Calculator Python Function
+# 7. Request / Response Models
+# --------------------------------
+
+class ChatRequest(BaseModel):
+
+    conversation_id: str
+
+    message: str
+
+
+class EmbeddingSearchRequest(BaseModel):
+
+    query: str
+
+
+class RAGRequest(BaseModel):
+
+    query: str
+
+
+class AgentRequest(BaseModel):
+
+    conversation_id: str
+
+    message: str
+
+
+class ClearRequest(BaseModel):
+
+    conversation_id: str
+
+
+class StructuredChatResponse(BaseModel):
+
+    topic: str
+
+    difficulty: Literal[
+
+        "beginner",
+
+        "intermediate",
+
+        "advanced"
+
+    ]
+
+    answer: str
+
+    key_points: list[str]
+
+
+# --------------------------------
+# 8. Calculator Function
 # --------------------------------
 
 def calculate(
@@ -381,34 +404,31 @@ def calculate(
 
 
 # --------------------------------
-# 10. Calculator Tool Definition
+# 9. Calculator Tool Definition
 # --------------------------------
 
 CALCULATOR_TOOL = {
 
-    "type": "function",
+    "type":
+        "function",
 
-    "name": "calculator",
+    "name":
+        "calculator",
 
-    "description": (
-
-        "Perform basic arithmetic calculations. "
-
-        "Use this tool for addition, subtraction, "
-
-        "multiplication, and division."
-
-    ),
+    "description":
+        "Perform basic arithmetic calculations.",
 
     "parameters": {
 
-        "type": "object",
+        "type":
+            "object",
 
         "properties": {
 
             "operation": {
 
-                "type": "string",
+                "type":
+                    "string",
 
                 "enum": [
 
@@ -426,13 +446,15 @@ CALCULATOR_TOOL = {
 
             "a": {
 
-                "type": "number"
+                "type":
+                    "number"
 
             },
 
             "b": {
 
-                "type": "number"
+                "type":
+                    "number"
 
             }
 
@@ -448,11 +470,13 @@ CALCULATOR_TOOL = {
 
         ],
 
-        "additionalProperties": False
+        "additionalProperties":
+            False
 
     },
 
-    "strict": True
+    "strict":
+        True
 
 }
 
@@ -465,7 +489,7 @@ TOOLS = [
 
 
 # --------------------------------
-# 11. Sample Documents
+# 10. Sample Knowledge
 # --------------------------------
 
 SAMPLE_DOCUMENTS = [
@@ -526,41 +550,51 @@ SAMPLE_DOCUMENT_METADATA = [
 
     {
 
-        "topic": "python",
+        "topic":
+            "python",
 
-        "category": "programming"
-
-    },
-
-    {
-
-        "topic": "fastapi",
-
-        "category": "backend"
+        "category":
+            "programming"
 
     },
 
     {
 
-        "topic": "sqlite",
+        "topic":
+            "fastapi",
 
-        "category": "database"
-
-    },
-
-    {
-
-        "topic": "embeddings",
-
-        "category": "ai"
+        "category":
+            "backend"
 
     },
 
     {
 
-        "topic": "rag",
+        "topic":
+            "sqlite",
 
-        "category": "ai"
+        "category":
+            "database"
+
+    },
+
+    {
+
+        "topic":
+            "embeddings",
+
+        "category":
+            "ai"
+
+    },
+
+    {
+
+        "topic":
+            "rag",
+
+        "category":
+            "ai"
 
     }
 
@@ -568,7 +602,7 @@ SAMPLE_DOCUMENT_METADATA = [
 
 
 # --------------------------------
-# 12. Create Embedding
+# 11. Create Embedding
 # --------------------------------
 
 def create_embedding(
@@ -577,25 +611,28 @@ def create_embedding(
 
 ):
 
-    embedding_response = (
+    response = (
         client.embeddings.create(
 
-            model=EMBEDDING_MODEL,
+            model=
+                EMBEDDING_MODEL,
 
-            input=text
+            input=
+                text
 
         )
     )
 
+
     return (
-        embedding_response
+        response
         .data[0]
         .embedding
     )
 
 
 # --------------------------------
-# 13. Initialize Vector Database
+# 12. Initialize Vector Database
 # --------------------------------
 
 def initialize_vector_database():
@@ -603,6 +640,7 @@ def initialize_vector_database():
     existing_documents = (
         vector_collection.count()
     )
+
 
     if existing_documents > 0:
 
@@ -622,12 +660,14 @@ def initialize_vector_database():
     )
 
 
-    embedding_response = (
+    response = (
         client.embeddings.create(
 
-            model=EMBEDDING_MODEL,
+            model=
+                EMBEDDING_MODEL,
 
-            input=SAMPLE_DOCUMENTS
+            input=
+                SAMPLE_DOCUMENTS
 
         )
     )
@@ -636,7 +676,7 @@ def initialize_vector_database():
     document_embeddings = []
 
 
-    for item in embedding_response.data:
+    for item in response.data:
 
         document_embeddings.append(
 
@@ -647,13 +687,17 @@ def initialize_vector_database():
 
     vector_collection.add(
 
-        ids=SAMPLE_DOCUMENT_IDS,
+        ids=
+            SAMPLE_DOCUMENT_IDS,
 
-        documents=SAMPLE_DOCUMENTS,
+        documents=
+            SAMPLE_DOCUMENTS,
 
-        embeddings=document_embeddings,
+        embeddings=
+            document_embeddings,
 
-        metadatas=SAMPLE_DOCUMENT_METADATA
+        metadatas=
+            SAMPLE_DOCUMENT_METADATA
 
     )
 
@@ -667,7 +711,7 @@ initialize_vector_database()
 
 
 # --------------------------------
-# 14. Retrieve Documents From Chroma
+# 13. Retrieve Documents
 # --------------------------------
 
 def retrieve_documents(
@@ -715,7 +759,8 @@ def retrieve_documents(
 
             ],
 
-            n_results=actual_n_results,
+            n_results=
+                actual_n_results,
 
             include=[
 
@@ -768,17 +813,17 @@ def retrieve_documents(
 
     ):
 
-        distance = (
-            distances[index]
-        )
-
 
         similarity = (
-            1 - distance
+
+            1
+            -
+            distances[index]
+
         )
 
 
-        retrieved_document = {
+        retrieved_documents.append({
 
             "id":
                 document_ids[index],
@@ -798,21 +843,14 @@ def retrieve_documents(
 
                 )
 
-        }
-
-
-        retrieved_documents.append(
-
-            retrieved_document
-
-        )
+        })
 
 
     return retrieved_documents
 
 
 # --------------------------------
-# 15. Knowledge Search Python Tool
+# 14. Knowledge Search Function
 # --------------------------------
 
 def search_knowledge(
@@ -847,38 +885,34 @@ def search_knowledge(
 
 
 # --------------------------------
-# 16. Knowledge Search Tool Definition
+# 15. Knowledge Search Tool
 # --------------------------------
 
 KNOWLEDGE_SEARCH_TOOL = {
 
-    "type": "function",
+    "type":
+        "function",
 
-    "name": "search_knowledge",
+    "name":
+        "search_knowledge",
 
-    "description": (
-
-        "Search the local knowledge base for "
-
-        "documents relevant to the user's question."
-
-    ),
+    "description":
+        "Search the local knowledge base for relevant documents.",
 
     "parameters": {
 
-        "type": "object",
+        "type":
+            "object",
 
         "properties": {
 
             "query": {
 
-                "type": "string",
+                "type":
+                    "string",
 
-                "description": (
-
+                "description":
                     "The semantic search query."
-
-                )
 
             }
 
@@ -890,11 +924,13 @@ KNOWLEDGE_SEARCH_TOOL = {
 
         ],
 
-        "additionalProperties": False
+        "additionalProperties":
+            False
 
     },
 
-    "strict": True
+    "strict":
+        True
 
 }
 
@@ -909,7 +945,7 @@ AGENT_TOOLS = [
 
 
 # --------------------------------
-# 17. Agent Tool Router
+# 16. Manual Agent Tool Router
 # --------------------------------
 
 def execute_agent_tool(
@@ -920,23 +956,33 @@ def execute_agent_tool(
 
     try:
 
-        arguments = json.loads(
+        arguments = (
+            json.loads(
 
-            tool_call.arguments
+                tool_call.arguments
 
+            )
         )
 
 
         if tool_call.name == "calculator":
 
-            result = calculate(
+            result = (
+                calculate(
 
-                arguments["operation"],
+                    arguments[
+                        "operation"
+                    ],
 
-                arguments["a"],
+                    arguments[
+                        "a"
+                    ],
 
-                arguments["b"]
+                    arguments[
+                        "b"
+                    ]
 
+                )
             )
 
 
@@ -950,10 +996,14 @@ def execute_agent_tool(
 
         if tool_call.name == "search_knowledge":
 
-            return search_knowledge(
+            return (
+                search_knowledge(
 
-                arguments["query"]
+                    arguments[
+                        "query"
+                    ]
 
+                )
             )
 
 
@@ -977,6 +1027,7 @@ def execute_agent_tool(
 
     ) as error:
 
+
         return {
 
             "error":
@@ -986,7 +1037,245 @@ def execute_agent_tool(
 
 
 # --------------------------------
-# 18. Serve Frontend
+# 17. LangChain Model
+# --------------------------------
+
+langchain_model = ChatOpenAI(
+
+    model=
+        CHAT_MODEL,
+
+    use_responses_api=
+        True
+
+)
+
+
+# --------------------------------
+# 18. LangChain Calculator Tool
+# --------------------------------
+
+@tool("calculator")
+def langchain_calculator(
+
+    operation: str,
+
+    a: float,
+
+    b: float
+
+) -> dict:
+
+    """
+    Perform basic arithmetic calculations.
+
+    Supported operations are:
+    add, subtract, multiply, and divide.
+    """
+
+    result = (
+        calculate(
+
+            operation,
+
+            a,
+
+            b
+
+        )
+    )
+
+
+    return {
+
+        "result":
+            result
+
+    }
+
+
+# --------------------------------
+# 19. LangChain Knowledge Tool
+# --------------------------------
+
+@tool("search_knowledge")
+def langchain_search_knowledge(
+
+    query: str
+
+) -> dict:
+
+    """
+    Search the local ChromaDB knowledge base
+    for information relevant to the user's question.
+    """
+
+    return (
+        search_knowledge(
+
+            query
+
+        )
+    )
+
+
+# --------------------------------
+# 20. Create LangChain Agent
+# --------------------------------
+
+langchain_agent = create_agent(
+
+    model=
+        langchain_model,
+
+    tools=[
+
+        langchain_calculator,
+
+        langchain_search_knowledge
+
+    ],
+
+    system_prompt=
+        LANGCHAIN_AGENT_PROMPT
+
+)
+
+
+# --------------------------------
+# 21. Extract LangChain Text
+# --------------------------------
+
+def extract_langchain_text(
+
+    message
+
+):
+
+    text_value = getattr(
+
+        message,
+
+        "text",
+
+        ""
+
+    )
+
+
+    if (
+
+        isinstance(
+
+            text_value,
+
+            str
+
+        )
+
+        and
+
+        text_value.strip()
+
+    ):
+
+        return text_value
+
+
+    content = getattr(
+
+        message,
+
+        "content",
+
+        ""
+
+    )
+
+
+    if isinstance(
+
+        content,
+
+        str
+
+    ):
+
+        return content
+
+
+    if isinstance(
+
+        content,
+
+        list
+
+    ):
+
+
+        text_parts = []
+
+
+        for block in content:
+
+
+            if not isinstance(
+
+                block,
+
+                dict
+
+            ):
+
+                continue
+
+
+            block_text = (
+
+                block.get(
+                    "text"
+                )
+
+                or
+
+                block.get(
+                    "content"
+                )
+
+            )
+
+
+            if isinstance(
+
+                block_text,
+
+                str
+
+            ):
+
+                text_parts.append(
+
+                    block_text
+
+                )
+
+
+        return (
+            "\n".join(
+
+                text_parts
+
+            )
+        )
+
+
+    return str(
+        content
+    )
+
+
+# --------------------------------
+# 22. Serve Frontend
 # --------------------------------
 
 @app.get("/")
@@ -998,10 +1287,7 @@ def home():
 
 
 # --------------------------------
-# 19. Main Chat Endpoint
-#
-# Normal Chat + Streaming
-# + Automatic Calculator Tool Calling
+# 23. Main Chat Endpoint
 # --------------------------------
 
 @app.post("/chat")
@@ -1061,17 +1347,23 @@ def chat(
             stream = (
                 client.responses.create(
 
-                    model="gpt-6-luna",
+                    model=
+                        CHAT_MODEL,
 
-                    instructions=SYSTEM_PROMPT,
+                    instructions=
+                        SYSTEM_PROMPT,
 
-                    input=conversation_history,
+                    input=
+                        conversation_history,
 
-                    tools=TOOLS,
+                    tools=
+                        TOOLS,
 
-                    tool_choice="auto",
+                    tool_choice=
+                        "auto",
 
-                    stream=True
+                    stream=
+                        True
 
                 )
             )
@@ -1084,13 +1376,22 @@ def chat(
 
                     event.type
 
-                    == "response.output_text.delta"
+                    ==
+
+                    "response.output_text.delta"
 
                 ):
 
-                    chunk = event.delta
 
-                    final_answer += chunk
+                    chunk = (
+                        event.delta
+                    )
+
+
+                    final_answer += (
+                        chunk
+                    )
+
 
                     yield chunk
 
@@ -1099,7 +1400,9 @@ def chat(
 
                     event.type
 
-                    == "response.output_item.added"
+                    ==
+
+                    "response.output_item.added"
 
                 ):
 
@@ -1108,9 +1411,12 @@ def chat(
 
                         event.item.type
 
-                        == "function_call"
+                        ==
+
+                        "function_call"
 
                     ):
+
 
                         tool_calls[
 
@@ -1123,7 +1429,9 @@ def chat(
 
                     event.type
 
-                    == "response.output_item.done"
+                    ==
+
+                    "response.output_item.done"
 
                 ):
 
@@ -1139,9 +1447,12 @@ def chat(
 
                         event.item.type
 
-                        == "function_call"
+                        ==
+
+                        "function_call"
 
                     ):
+
 
                         tool_calls[
 
@@ -1150,14 +1461,11 @@ def chat(
                         ] = event.item
 
 
-            # --------------------------------
-            # No tool required
-            # --------------------------------
-
             if not tool_calls:
 
 
                 if final_answer.strip():
+
 
                     save_message(
 
@@ -1172,10 +1480,6 @@ def chat(
 
                 return
 
-
-            # --------------------------------
-            # Calculator requested
-            # --------------------------------
 
             tool_context = list(
 
@@ -1202,66 +1506,82 @@ def chat(
 
                     tool_call.name
 
-                    == "calculator"
+                    !=
+
+                    "calculator"
 
                 ):
 
+                    continue
 
-                    arguments = json.loads(
+
+                arguments = (
+                    json.loads(
 
                         tool_call.arguments
 
                     )
+                )
 
 
-                    result = calculate(
+                result = (
+                    calculate(
 
-                        arguments["operation"],
+                        arguments[
+                            "operation"
+                        ],
 
-                        arguments["a"],
+                        arguments[
+                            "a"
+                        ],
 
-                        arguments["b"]
+                        arguments[
+                            "b"
+                        ]
 
                     )
+                )
 
 
-                    tool_context.append({
+                tool_context.append({
 
-                        "type":
-                            "function_call_output",
+                    "type":
+                        "function_call_output",
 
-                        "call_id":
-                            tool_call.call_id,
+                    "call_id":
+                        tool_call.call_id,
 
-                        "output":
-                            json.dumps({
+                    "output":
+                        json.dumps({
 
-                                "result":
-                                    result
+                            "result":
+                                result
 
-                            })
+                        })
 
-                    })
+                })
 
-
-            # --------------------------------
-            # Second LLM call
-            # --------------------------------
 
             final_stream = (
                 client.responses.create(
 
-                    model="gpt-6-luna",
+                    model=
+                        CHAT_MODEL,
 
-                    instructions=SYSTEM_PROMPT,
+                    instructions=
+                        SYSTEM_PROMPT,
 
-                    input=tool_context,
+                    input=
+                        tool_context,
 
-                    tools=TOOLS,
+                    tools=
+                        TOOLS,
 
-                    tool_choice="none",
+                    tool_choice=
+                        "none",
 
-                    stream=True
+                    stream=
+                        True
 
                 )
             )
@@ -1277,18 +1597,28 @@ def chat(
 
                     event.type
 
-                    == "response.output_text.delta"
+                    ==
+
+                    "response.output_text.delta"
 
                 ):
 
-                    chunk = event.delta
 
-                    final_answer += chunk
+                    chunk = (
+                        event.delta
+                    )
+
+
+                    final_answer += (
+                        chunk
+                    )
+
 
                     yield chunk
 
 
             if final_answer.strip():
+
 
                 save_message(
 
@@ -1302,6 +1632,7 @@ def chat(
 
 
         except Exception as error:
+
 
             print(
 
@@ -1325,13 +1656,14 @@ def chat(
 
         generate_response(),
 
-        media_type="text/plain"
+        media_type=
+            "text/plain"
 
     )
 
 
 # --------------------------------
-# 20. Structured Chat Endpoint
+# 24. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
@@ -1366,10 +1698,11 @@ def structured_chat(
     })
 
 
-    structured_response = (
+    response = (
         client.responses.parse(
 
-            model="gpt-6-luna",
+            model=
+                CHAT_MODEL,
 
             instructions="""
 
@@ -1390,7 +1723,8 @@ def structured_chat(
 
             """,
 
-            input=conversation_history,
+            input=
+                conversation_history,
 
             text_format=
                 StructuredChatResponse
@@ -1400,23 +1734,20 @@ def structured_chat(
 
 
     structured_answer = (
-        structured_response
-        .output_parsed
+        response.output_parsed
     )
 
 
     if structured_answer is None:
+
 
         raise HTTPException(
 
             status_code=500,
 
             detail=(
-
                 "The AI did not return "
-
                 "structured output."
-
             )
 
         )
@@ -1441,8 +1772,7 @@ def structured_chat(
 
         + "\n".join(
 
-            structured_answer
-            .key_points
+            structured_answer.key_points
 
         )
 
@@ -1461,13 +1791,12 @@ def structured_chat(
 
 
     return (
-        structured_answer
-        .model_dump()
+        structured_answer.model_dump()
     )
 
 
 # --------------------------------
-# 21. Vector Database Semantic Search
+# 25. Semantic Search Endpoint
 # --------------------------------
 
 @app.post("/embeddings/search")
@@ -1478,15 +1807,10 @@ def embedding_search(
 
 ):
 
-    query_text = (
-        request.query
-    )
-
-
     matches = (
         retrieve_documents(
 
-            query_text,
+            request.query,
 
             n_results=3
 
@@ -1495,6 +1819,7 @@ def embedding_search(
 
 
     if not matches:
+
 
         raise HTTPException(
 
@@ -1510,7 +1835,7 @@ def embedding_search(
     return {
 
         "query":
-            query_text,
+            request.query,
 
         "total_documents":
             vector_collection.count(),
@@ -1525,7 +1850,7 @@ def embedding_search(
 
 
 # --------------------------------
-# 22. RAG Endpoint
+# 26. RAG Endpoint
 # --------------------------------
 
 @app.post("/rag")
@@ -1535,15 +1860,10 @@ def rag_chat(
 
 ):
 
-    query_text = (
-        request.query
-    )
-
-
     retrieved_documents = (
         retrieve_documents(
 
-            query_text,
+            request.query,
 
             n_results=3
 
@@ -1552,6 +1872,7 @@ def rag_chat(
 
 
     if not retrieved_documents:
+
 
         raise HTTPException(
 
@@ -1579,18 +1900,12 @@ def rag_chat(
 
     ):
 
-        context_part = (
+
+        context_parts.append(
 
             f"Document {index}:\n"
 
             f"{item['document']}"
-
-        )
-
-
-        context_parts.append(
-
-            context_part
 
         )
 
@@ -1612,15 +1927,16 @@ def rag_chat(
 
         "USER QUESTION:\n"
 
-        f"{query_text}"
+        f"{request.query}"
 
     )
 
 
-    llm_response = (
+    response = (
         client.responses.create(
 
-            model="gpt-6-luna",
+            model=
+                CHAT_MODEL,
 
             instructions=
                 RAG_SYSTEM_PROMPT,
@@ -1632,18 +1948,13 @@ def rag_chat(
     )
 
 
-    answer = (
-        llm_response.output_text
-    )
-
-
     return {
 
         "query":
-            query_text,
+            request.query,
 
         "answer":
-            answer,
+            response.output_text,
 
         "retrieved_documents":
             retrieved_documents
@@ -1652,7 +1963,7 @@ def rag_chat(
 
 
 # --------------------------------
-# 23. Agent Endpoint
+# 27. Manual Agent Endpoint
 # --------------------------------
 
 @app.post("/agent")
@@ -1667,10 +1978,6 @@ def agent_chat(
     )
 
 
-    # --------------------------------
-    # Load conversation history
-    # --------------------------------
-
     conversation_history = (
         get_conversation_history(
 
@@ -1679,10 +1986,6 @@ def agent_chat(
         )
     )
 
-
-    # --------------------------------
-    # Prepare agent context
-    # --------------------------------
 
     agent_input = list(
 
@@ -1716,10 +2019,6 @@ def agent_chat(
     tool_trace = []
 
 
-    # --------------------------------
-    # Agent loop
-    # --------------------------------
-
     for step in range(
 
         1,
@@ -1736,10 +2035,11 @@ def agent_chat(
         )
 
 
-        agent_response = (
+        response = (
             client.responses.create(
 
-                model="gpt-6-luna",
+                model=
+                    CHAT_MODEL,
 
                 instructions=
                     AGENT_SYSTEM_PROMPT,
@@ -1750,51 +2050,41 @@ def agent_chat(
                 tools=
                     AGENT_TOOLS,
 
-                tool_choice="auto"
+                tool_choice=
+                    "auto"
 
             )
         )
 
 
-        # --------------------------------
-        # Preserve model output
-        # --------------------------------
-
         agent_input.extend(
 
-            agent_response.output
+            response.output
 
         )
 
-
-        # --------------------------------
-        # Find function calls
-        # --------------------------------
 
         tool_calls = [
 
             item
 
-            for item in agent_response.output
+            for item in response.output
 
             if item.type == "function_call"
 
         ]
 
 
-        # --------------------------------
-        # No tool call = final answer
-        # --------------------------------
-
         if not tool_calls:
 
 
             final_answer = (
-                agent_response.output_text
+                response.output_text
             )
 
 
             if final_answer.strip():
+
 
                 save_message(
 
@@ -1821,20 +2111,7 @@ def agent_chat(
             }
 
 
-        # --------------------------------
-        # Execute requested tools
-        # --------------------------------
-
         for tool_call in tool_calls:
-
-
-            print(
-
-                "Agent requested tool:",
-
-                tool_call.name
-
-            )
 
 
             tool_result = (
@@ -1843,6 +2120,15 @@ def agent_chat(
                     tool_call
 
                 )
+            )
+
+
+            print(
+
+                "Agent requested tool:",
+
+                tool_call.name
+
             )
 
 
@@ -1869,10 +2155,6 @@ def agent_chat(
             })
 
 
-            # --------------------------------
-            # Send tool result back to LLM
-            # --------------------------------
-
             agent_input.append({
 
                 "type":
@@ -1891,10 +2173,6 @@ def agent_chat(
             })
 
 
-    # --------------------------------
-    # Too many steps
-    # --------------------------------
-
     raise HTTPException(
 
         status_code=500,
@@ -1911,7 +2189,154 @@ def agent_chat(
 
 
 # --------------------------------
-# 24. Clear Conversation
+# 28. LangChain Agent Endpoint
+# --------------------------------
+
+@app.post("/langchain/agent")
+def langchain_agent_chat(
+
+    request: AgentRequest
+
+):
+
+    conversation_id = (
+        request.conversation_id
+    )
+
+
+    conversation_history = (
+        get_conversation_history(
+
+            conversation_id
+
+        )
+    )
+
+
+    messages = list(
+
+        conversation_history
+
+    )
+
+
+    messages.append({
+
+        "role":
+            "user",
+
+        "content":
+            request.message
+
+    })
+
+
+    save_message(
+
+        conversation_id,
+
+        "user",
+
+        request.message
+
+    )
+
+
+    try:
+
+        result = (
+            langchain_agent.invoke({
+
+                "messages":
+                    messages
+
+            })
+        )
+
+
+        final_message = (
+            result[
+                "messages"
+            ][-1]
+        )
+
+
+        final_answer = (
+            extract_langchain_text(
+
+                final_message
+
+            )
+        )
+
+
+        if not final_answer.strip():
+
+
+            raise ValueError(
+
+                "LangChain returned an empty final answer."
+
+            )
+
+
+        save_message(
+
+            conversation_id,
+
+            "assistant",
+
+            final_answer
+
+        )
+
+
+        return {
+
+            "answer":
+                final_answer,
+
+            "message_count":
+                len(
+
+                    result[
+                        "messages"
+                    ]
+
+                )
+
+        }
+
+
+    except Exception as error:
+
+
+        print(
+
+            "\nLangChain Agent Error:",
+
+            error
+
+        )
+
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=(
+
+                "The LangChain agent failed "
+
+                "to complete the request."
+
+            )
+
+        ) from error
+
+
+# --------------------------------
+# 29. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")

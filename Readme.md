@@ -1461,9 +1461,510 @@ The important difference is the repeated decision loop.
 
 ---
 
-## Milestone 16 — LangChain
+## Milestone 16 — LangChain Agent
 
-Understand how LangChain simplifies parts of the architecture that were first built manually.
+Added LangChain to the project and rebuilt the existing agent workflow using LangChain's agent and tool abstractions.
+
+The manual agent from Milestone 15 was kept in the project so the difference between building an agent manually and using an agent framework can be clearly understood.
+
+### Why LangChain?
+
+In Milestone 15, the complete agent loop was written manually.
+
+The application had to handle:
+
+```text
+LLM Request
+↓
+Detect Tool Calls
+↓
+Read Tool Name
+↓
+Parse Tool Arguments
+↓
+Route Tool
+↓
+Execute Python Function
+↓
+Create Tool Result
+↓
+Send Tool Result Back To LLM
+↓
+Call LLM Again
+↓
+Repeat
+↓
+Final Answer
+```
+
+LangChain provides abstractions that manage much of this orchestration automatically.
+
+### Packages Added
+
+```bash
+pip install -U langchain langchain-openai
+```
+
+### New Imports
+
+```python
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
+```
+
+### LangChain Model
+
+Added:
+
+```python
+langchain_model = ChatOpenAI(
+    model=CHAT_MODEL,
+    use_responses_api=True
+)
+```
+
+This creates a LangChain model wrapper around the OpenAI model.
+
+### Manual OpenAI Client vs LangChain Model
+
+The project now contains both:
+
+```text
+OpenAI SDK
+
+client = OpenAI(...)
+```
+
+used by:
+
+```text
+/chat
+/rag
+/agent
+/embeddings/search
+```
+
+and:
+
+```text
+LangChain
+
+langchain_model = ChatOpenAI(...)
+```
+
+used by:
+
+```text
+/langchain/agent
+```
+
+### LangChain Tools
+
+The existing Python calculator and knowledge retrieval functions were reused as LangChain tools.
+
+#### Calculator Tool
+
+```python
+@tool("calculator")
+def langchain_calculator(
+    operation: str,
+    a: float,
+    b: float
+) -> dict:
+```
+
+The tool internally reuses:
+
+```text
+calculate()
+```
+
+### Knowledge Search Tool
+
+```python
+@tool("search_knowledge")
+def langchain_search_knowledge(
+    query: str
+) -> dict:
+```
+
+The tool internally reuses:
+
+```text
+search_knowledge()
+↓
+retrieve_documents()
+↓
+ChromaDB
+```
+
+### What `@tool` Does
+
+Before LangChain, tool schemas were manually written using JSON.
+
+Example:
+
+```text
+Tool Name
++
+Description
++
+Parameters
++
+Required Fields
++
+JSON Schema
+```
+
+LangChain can create the tool representation using:
+
+```text
+Python Function
++
+Type Hints
++
+Docstring
+```
+
+Example:
+
+```python
+@tool("calculator")
+def langchain_calculator(
+    operation: str,
+    a: float,
+    b: float
+) -> dict:
+```
+
+### LangChain Agent
+
+Created the agent using:
+
+```python
+langchain_agent = create_agent(
+    model=langchain_model,
+    tools=[
+        langchain_calculator,
+        langchain_search_knowledge
+    ],
+    system_prompt=LANGCHAIN_AGENT_PROMPT
+)
+```
+
+The agent receives:
+
+```text
+Model
++
+Tools
++
+System Prompt
+```
+
+LangChain then manages the repeated model and tool execution cycle.
+
+### New Endpoint
+
+Added:
+
+```text
+POST /langchain/agent
+```
+
+Example request:
+
+```json
+{
+  "conversation_id": "lc-test-1",
+  "message": "Search the knowledge base for embeddings and multiply the number of returned documents by 10."
+}
+```
+
+### LangChain Agent Flow
+
+```text
+User
+↓
+POST /langchain/agent
+↓
+AgentRequest
+↓
+Load SQLite Conversation History
+↓
+messages
+↓
+langchain_agent.invoke()
+↓
+LangChain Agent
+↓
+LLM
+↓
+Tool Required?
+↓
+┌────────────────────┬─────────────────────┐
+↓                    ↓
+calculator       search_knowledge
+↓                    ↓
+calculate()      ChromaDB Retrieval
+↓                    ↓
+Tool Result       Tool Result
+└──────────────┬─────┘
+               ↓
+       LangChain Agent Loop
+               ↓
+      Another Tool Needed?
+               ↓
+          Final Answer
+               ↓
+          Save SQLite
+               ↓
+         API Response
+```
+
+### Example Multi-Step Execution
+
+User:
+
+```text
+Search the knowledge base for embeddings
+and multiply the number of returned documents by 10.
+```
+
+Possible execution:
+
+```text
+Step 1
+
+LangChain Agent
+↓
+search_knowledge
+↓
+ChromaDB
+↓
+3 documents returned
+
+
+Step 2
+
+LangChain Agent
+↓
+calculator
+↓
+3 × 10
+↓
+30
+
+
+Step 3
+
+LangChain Agent
+↓
+Final Answer
+```
+
+### Manual Agent vs LangChain Agent
+
+Manual Agent:
+
+```text
+POST /agent
+↓
+OpenAI Responses API
+↓
+Our Python Agent Loop
+↓
+Detect Tool Calls
+↓
+execute_agent_tool()
+↓
+function_call_output
+↓
+Call LLM Again
+```
+
+LangChain Agent:
+
+```text
+POST /langchain/agent
+↓
+langchain_agent.invoke()
+↓
+LangChain
+↓
+Model
+↓
+Tool
+↓
+Tool Result
+↓
+Model
+↓
+Final Answer
+```
+
+### What Changed?
+
+Before:
+
+```text
+We manually managed:
+
+Tool Schemas
++
+Function Calls
++
+Tool Routing
++
+Tool Results
++
+Agent Loop
++
+State Passing
+```
+
+Now:
+
+```text
+We provide:
+
+Model
++
+Tools
++
+Prompt
+
+↓
+
+LangChain manages the agent loop
+```
+
+### Conversation Memory
+
+The LangChain agent still uses the existing SQLite conversation history.
+
+```text
+conversation_id
+↓
+SQLite
+↓
+get_conversation_history()
+↓
+messages
+↓
+LangChain Agent
+```
+
+This allows existing project memory to work with the new LangChain agent.
+
+### Important Variables
+
+`langchain_model`
+
+Stores the OpenAI model wrapped by LangChain.
+
+`langchain_calculator`
+
+LangChain calculator tool.
+
+`langchain_search_knowledge`
+
+LangChain knowledge retrieval tool.
+
+`langchain_agent`
+
+Agent created using `create_agent()`.
+
+`messages`
+
+Stores the conversation history and current user message.
+
+`result`
+
+Stores the complete result returned by the LangChain agent.
+
+`result["messages"]`
+
+Stores the complete message sequence generated during agent execution.
+
+`final_message`
+
+Stores the last message generated by the agent.
+
+`final_answer`
+
+Stores the final text returned to the user.
+
+### Current Agent Architecture
+
+```text
+                         FastAPI
+                            ↓
+             ┌──────────────┴──────────────┐
+             ↓                             ↓
+          /agent                    /langchain/agent
+             ↓                             ↓
+       Manual Agent                  LangChain Agent
+             ↓                             ↓
+     Our Python Loop                  create_agent()
+             ↓                             ↓
+     ┌───────┴────────┐             ┌──────┴─────────┐
+     ↓                ↓             ↓                ↓
+calculator     search_knowledge  calculator   search_knowledge
+                      ↓                              ↓
+                   ChromaDB                       ChromaDB
+```
+
+### Why Keep Both Agents?
+
+The manual agent teaches:
+
+```text
+How agent loops actually work
+```
+
+The LangChain agent teaches:
+
+```text
+How frameworks simplify agent development
+```
+
+Keeping both makes it easier to understand exactly what LangChain is doing for the application.
+
+### Learned
+
+- LangChain
+- `ChatOpenAI`
+- `create_agent()`
+- `@tool`
+- LangChain tools
+- Tool schemas from Python functions
+- Tool descriptions using docstrings
+- LangChain model wrappers
+- Agent invocation
+- `agent.invoke()`
+- Agent message state
+- Framework-managed agent loops
+- Reusing existing Python functions
+- Reusing ChromaDB retrieval
+- Manual agents vs LangChain agents
+- Agent orchestration
+- Model + Tools + Prompt architecture
+
+---
+
+## Milestone 17 — LangGraph
+
+Next: build the agent workflow using LangGraph and learn:
+
+- State
+- Nodes
+- Edges
+- Conditional routing
+- Tool nodes
+- Graph execution
+- Stateful workflows
 
 ---
 
