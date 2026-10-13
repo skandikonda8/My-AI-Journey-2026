@@ -8,6 +8,19 @@ from typing import Literal
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage
+
+from langgraph.graph import (
+    StateGraph,
+    START,
+    END,
+    MessagesState
+)
+
+from langgraph.prebuilt import (
+    ToolNode,
+    tools_condition
+)
 
 import chromadb
 import json
@@ -28,10 +41,15 @@ client = OpenAI(
 app = FastAPI()
 
 DATABASE_NAME = "chatbot.db"
+
 CHAT_MODEL = "gpt-6-luna"
+
 EMBEDDING_MODEL = "text-embedding-3-small"
+
 CHROMA_PATH = "./chroma_db"
+
 CHROMA_COLLECTION_NAME = "ai_journey_documents"
+
 MAX_AGENT_STEPS = 5
 
 
@@ -168,6 +186,26 @@ Do not invent tool results.
 """
 
 
+LANGGRAPH_AGENT_PROMPT = """
+You are a helpful AI agent running inside a LangGraph workflow.
+
+Use the available tools whenever they are needed.
+
+Use the calculator tool for arithmetic.
+
+Use the search_knowledge tool when the user asks about information
+that may exist in the local knowledge base.
+
+You may use multiple tools across multiple graph cycles when necessary.
+
+After receiving a tool result, decide whether another tool is needed.
+
+When you have enough information, provide a clear final answer.
+
+Do not invent tool results.
+"""
+
+
 # --------------------------------
 # 4. SQLite Database
 # --------------------------------
@@ -183,15 +221,10 @@ def initialize_database():
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             conversation_id TEXT NOT NULL,
-
             role TEXT NOT NULL,
-
             content TEXT NOT NULL,
-
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -210,13 +243,9 @@ initialize_database()
 # --------------------------------
 
 def save_message(
-
     conversation_id: str,
-
     role: str,
-
     content: str
-
 ):
 
     connection = sqlite3.connect(
@@ -226,28 +255,19 @@ def save_message(
     cursor = connection.cursor()
 
     cursor.execute(
-
         """
         INSERT INTO messages (
-
             conversation_id,
-
             role,
-
             content
         )
-
         VALUES (?, ?, ?)
         """,
-
         (
             conversation_id,
-
             role,
-
             content
         )
-
     )
 
     connection.commit()
@@ -260,9 +280,7 @@ def save_message(
 # --------------------------------
 
 def get_conversation_history(
-
     conversation_id: str
-
 ):
 
     connection = sqlite3.connect(
@@ -272,21 +290,15 @@ def get_conversation_history(
     cursor = connection.cursor()
 
     cursor.execute(
-
         """
         SELECT role, content
-
         FROM messages
-
         WHERE conversation_id = ?
-
         ORDER BY id
         """,
-
         (
             conversation_id,
         )
-
     )
 
     rows = cursor.fetchall()
@@ -298,13 +310,8 @@ def get_conversation_history(
     for role, content in rows:
 
         conversation_history.append({
-
-            "role":
-                role,
-
-            "content":
-                content
-
+            "role": role,
+            "content": content
         })
 
     return conversation_history
@@ -348,13 +355,9 @@ class StructuredChatResponse(BaseModel):
     topic: str
 
     difficulty: Literal[
-
         "beginner",
-
         "intermediate",
-
         "advanced"
-
     ]
 
     answer: str
@@ -367,13 +370,9 @@ class StructuredChatResponse(BaseModel):
 # --------------------------------
 
 def calculate(
-
     operation: str,
-
     a: float,
-
     b: float
-
 ):
 
     if operation == "add":
@@ -404,7 +403,7 @@ def calculate(
 
 
 # --------------------------------
-# 9. Calculator Tool Definition
+# 9. Manual Calculator Tool
 # --------------------------------
 
 CALCULATOR_TOOL = {
@@ -431,15 +430,10 @@ CALCULATOR_TOOL = {
                     "string",
 
                 "enum": [
-
                     "add",
-
                     "subtract",
-
                     "multiply",
-
                     "divide"
-
                 ]
 
             },
@@ -461,13 +455,9 @@ CALCULATOR_TOOL = {
         },
 
         "required": [
-
             "operation",
-
             "a",
-
             "b"
-
         ],
 
         "additionalProperties":
@@ -482,9 +472,7 @@ CALCULATOR_TOOL = {
 
 
 TOOLS = [
-
     CALCULATOR_TOOL
-
 ]
 
 
@@ -496,35 +484,28 @@ SAMPLE_DOCUMENTS = [
 
     (
         "Python inheritance allows a child class "
-
         "to reuse properties and methods from "
-
         "a parent class."
     ),
 
     (
         "FastAPI is a Python web framework "
-
         "used to build APIs and backend services."
     ),
 
     (
         "SQLite is a lightweight relational "
-
         "database that stores data in a local file."
     ),
 
     (
         "Embeddings convert text into numerical "
-
         "vectors that represent semantic meaning."
     ),
 
     (
         "Retrieval Augmented Generation retrieves "
-
         "relevant information before asking an LLM "
-
         "to generate an answer."
     )
 
@@ -534,13 +515,9 @@ SAMPLE_DOCUMENTS = [
 SAMPLE_DOCUMENT_IDS = [
 
     "doc_1",
-
     "doc_2",
-
     "doc_3",
-
     "doc_4",
-
     "doc_5"
 
 ]
@@ -549,53 +526,43 @@ SAMPLE_DOCUMENT_IDS = [
 SAMPLE_DOCUMENT_METADATA = [
 
     {
-
         "topic":
             "python",
 
         "category":
             "programming"
-
     },
 
     {
-
         "topic":
             "fastapi",
 
         "category":
             "backend"
-
     },
 
     {
-
         "topic":
             "sqlite",
 
         "category":
             "database"
-
     },
 
     {
-
         "topic":
             "embeddings",
 
         "category":
             "ai"
-
     },
 
     {
-
         "topic":
             "rag",
 
         "category":
             "ai"
-
     }
 
 ]
@@ -606,23 +573,13 @@ SAMPLE_DOCUMENT_METADATA = [
 # --------------------------------
 
 def create_embedding(
-
     text: str
-
 ):
 
-    response = (
-        client.embeddings.create(
-
-            model=
-                EMBEDDING_MODEL,
-
-            input=
-                text
-
-        )
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=text
     )
-
 
     return (
         response
@@ -645,11 +602,8 @@ def initialize_vector_database():
     if existing_documents > 0:
 
         print(
-
             f"\nVector database already initialized "
-
             f"with {existing_documents} documents."
-
         )
 
         return
@@ -660,16 +614,9 @@ def initialize_vector_database():
     )
 
 
-    response = (
-        client.embeddings.create(
-
-            model=
-                EMBEDDING_MODEL,
-
-            input=
-                SAMPLE_DOCUMENTS
-
-        )
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=SAMPLE_DOCUMENTS
     )
 
 
@@ -679,26 +626,15 @@ def initialize_vector_database():
     for item in response.data:
 
         document_embeddings.append(
-
             item.embedding
-
         )
 
 
     vector_collection.add(
-
-        ids=
-            SAMPLE_DOCUMENT_IDS,
-
-        documents=
-            SAMPLE_DOCUMENTS,
-
-        embeddings=
-            document_embeddings,
-
-        metadatas=
-            SAMPLE_DOCUMENT_METADATA
-
+        ids=SAMPLE_DOCUMENT_IDS,
+        documents=SAMPLE_DOCUMENTS,
+        embeddings=document_embeddings,
+        metadatas=SAMPLE_DOCUMENT_METADATA
     )
 
 
@@ -715,11 +651,8 @@ initialize_vector_database()
 # --------------------------------
 
 def retrieve_documents(
-
     query_text: str,
-
     n_results: int = 3
-
 ):
 
     total_documents = (
@@ -733,19 +666,14 @@ def retrieve_documents(
 
 
     actual_n_results = min(
-
         n_results,
-
         total_documents
-
     )
 
 
     query_embedding = (
         create_embedding(
-
             query_text
-
         )
     )
 
@@ -754,22 +682,16 @@ def retrieve_documents(
         vector_collection.query(
 
             query_embeddings=[
-
                 query_embedding
-
             ],
 
             n_results=
                 actual_n_results,
 
             include=[
-
                 "documents",
-
                 "metadatas",
-
                 "distances"
-
             ]
 
         )
@@ -808,18 +730,13 @@ def retrieve_documents(
 
 
     for index in range(
-
         len(documents)
-
     ):
 
-
         similarity = (
-
             1
             -
             distances[index]
-
         )
 
 
@@ -836,11 +753,8 @@ def retrieve_documents(
 
             "similarity":
                 round(
-
                     similarity,
-
                     4
-
                 )
 
         })
@@ -854,18 +768,13 @@ def retrieve_documents(
 # --------------------------------
 
 def search_knowledge(
-
     query: str
-
 ):
 
     matches = (
         retrieve_documents(
-
             query,
-
             n_results=3
-
         )
     )
 
@@ -885,7 +794,7 @@ def search_knowledge(
 
 
 # --------------------------------
-# 15. Knowledge Search Tool
+# 15. Manual Knowledge Search Tool
 # --------------------------------
 
 KNOWLEDGE_SEARCH_TOOL = {
@@ -919,9 +828,7 @@ KNOWLEDGE_SEARCH_TOOL = {
         },
 
         "required": [
-
             "query"
-
         ],
 
         "additionalProperties":
@@ -949,40 +856,22 @@ AGENT_TOOLS = [
 # --------------------------------
 
 def execute_agent_tool(
-
     tool_call
-
 ):
 
     try:
 
-        arguments = (
-            json.loads(
-
-                tool_call.arguments
-
-            )
+        arguments = json.loads(
+            tool_call.arguments
         )
 
 
         if tool_call.name == "calculator":
 
-            result = (
-                calculate(
-
-                    arguments[
-                        "operation"
-                    ],
-
-                    arguments[
-                        "a"
-                    ],
-
-                    arguments[
-                        "b"
-                    ]
-
-                )
+            result = calculate(
+                arguments["operation"],
+                arguments["a"],
+                arguments["b"]
             )
 
 
@@ -996,14 +885,8 @@ def execute_agent_tool(
 
         if tool_call.name == "search_knowledge":
 
-            return (
-                search_knowledge(
-
-                    arguments[
-                        "query"
-                    ]
-
-                )
+            return search_knowledge(
+                arguments["query"]
             )
 
 
@@ -1016,15 +899,10 @@ def execute_agent_tool(
 
 
     except (
-
         json.JSONDecodeError,
-
         KeyError,
-
         TypeError,
-
         ValueError
-
     ) as error:
 
 
@@ -1057,13 +935,9 @@ langchain_model = ChatOpenAI(
 
 @tool("calculator")
 def langchain_calculator(
-
     operation: str,
-
     a: float,
-
     b: float
-
 ) -> dict:
 
     """
@@ -1073,16 +947,10 @@ def langchain_calculator(
     add, subtract, multiply, and divide.
     """
 
-    result = (
-        calculate(
-
-            operation,
-
-            a,
-
-            b
-
-        )
+    result = calculate(
+        operation,
+        a,
+        b
     )
 
 
@@ -1100,9 +968,7 @@ def langchain_calculator(
 
 @tool("search_knowledge")
 def langchain_search_knowledge(
-
     query: str
-
 ) -> dict:
 
     """
@@ -1110,12 +976,8 @@ def langchain_search_knowledge(
     for information relevant to the user's question.
     """
 
-    return (
-        search_knowledge(
-
-            query
-
-        )
+    return search_knowledge(
+        query
     )
 
 
@@ -1129,11 +991,8 @@ langchain_agent = create_agent(
         langchain_model,
 
     tools=[
-
         langchain_calculator,
-
         langchain_search_knowledge
-
     ],
 
     system_prompt=
@@ -1143,75 +1002,51 @@ langchain_agent = create_agent(
 
 
 # --------------------------------
-# 21. Extract LangChain Text
+# 21. Extract AI Message Text
 # --------------------------------
 
-def extract_langchain_text(
-
+def extract_ai_text(
     message
-
 ):
 
     text_value = getattr(
-
         message,
-
         "text",
-
         ""
-
     )
 
 
     if (
-
         isinstance(
-
             text_value,
-
             str
-
         )
-
         and
-
         text_value.strip()
-
     ):
 
         return text_value
 
 
     content = getattr(
-
         message,
-
         "content",
-
         ""
-
     )
 
 
     if isinstance(
-
         content,
-
         str
-
     ):
 
         return content
 
 
     if isinstance(
-
         content,
-
         list
-
     ):
-
 
         text_parts = []
 
@@ -1220,11 +1055,8 @@ def extract_langchain_text(
 
 
             if not isinstance(
-
                 block,
-
                 dict
-
             ):
 
                 continue
@@ -1246,26 +1078,17 @@ def extract_langchain_text(
 
 
             if isinstance(
-
                 block_text,
-
                 str
-
             ):
 
                 text_parts.append(
-
                     block_text
-
                 )
 
 
-        return (
-            "\n".join(
-
-                text_parts
-
-            )
+        return "\n".join(
+            text_parts
         )
 
 
@@ -1274,8 +1097,174 @@ def extract_langchain_text(
     )
 
 
+# ============================================
+# MILESTONE 17 — LANGGRAPH
+# ============================================
+
+
 # --------------------------------
-# 22. Serve Frontend
+# 22. LangGraph Tools
+# --------------------------------
+
+LANGGRAPH_TOOLS = [
+
+    langchain_calculator,
+
+    langchain_search_knowledge
+
+]
+
+
+# --------------------------------
+# 23. Bind Tools To LangGraph Model
+# --------------------------------
+
+langgraph_model = (
+    langchain_model.bind_tools(
+        LANGGRAPH_TOOLS
+    )
+)
+
+
+# --------------------------------
+# 24. LangGraph Agent Node
+# --------------------------------
+
+def langgraph_agent_node(
+    state: MessagesState
+):
+
+    model_messages = [
+
+        SystemMessage(
+            content=
+                LANGGRAPH_AGENT_PROMPT
+        ),
+
+        *state[
+            "messages"
+        ]
+
+    ]
+
+
+    response = (
+        langgraph_model.invoke(
+            model_messages
+        )
+    )
+
+
+    return {
+
+        "messages": [
+            response
+        ]
+
+    }
+
+
+# --------------------------------
+# 25. LangGraph Tool Node
+# --------------------------------
+
+langgraph_tool_node = ToolNode(
+
+    LANGGRAPH_TOOLS
+
+)
+
+
+# --------------------------------
+# 26. Build LangGraph Workflow
+# --------------------------------
+
+langgraph_builder = StateGraph(
+
+    MessagesState
+
+)
+
+
+# Agent Node
+
+langgraph_builder.add_node(
+
+    "agent",
+
+    langgraph_agent_node
+
+)
+
+
+# Tool Node
+
+langgraph_builder.add_node(
+
+    "tools",
+
+    langgraph_tool_node
+
+)
+
+
+# START -> agent
+
+langgraph_builder.add_edge(
+
+    START,
+
+    "agent"
+
+)
+
+
+# agent -> tools OR END
+
+langgraph_builder.add_conditional_edges(
+
+    "agent",
+
+    tools_condition,
+
+    {
+
+        "tools":
+            "tools",
+
+        "__end__":
+            END
+
+    }
+
+)
+
+
+# tools -> agent
+
+langgraph_builder.add_edge(
+
+    "tools",
+
+    "agent"
+
+)
+
+
+# Compile Graph
+
+langgraph_agent = (
+    langgraph_builder.compile()
+)
+
+
+# ============================================
+# API ENDPOINTS
+# ============================================
+
+
+# --------------------------------
+# 27. Serve Frontend
 # --------------------------------
 
 @app.get("/")
@@ -1287,14 +1276,12 @@ def home():
 
 
 # --------------------------------
-# 23. Main Chat Endpoint
+# 28. Main Chat Endpoint
 # --------------------------------
 
 @app.post("/chat")
 def chat(
-
     request: ChatRequest
-
 ):
 
     conversation_id = (
@@ -1304,9 +1291,7 @@ def chat(
 
     conversation_history = (
         get_conversation_history(
-
             conversation_id
-
         )
     )
 
@@ -1323,13 +1308,9 @@ def chat(
 
 
     save_message(
-
         conversation_id,
-
         "user",
-
         request.message
-
     )
 
 
@@ -1468,13 +1449,9 @@ def chat(
 
 
                     save_message(
-
                         conversation_id,
-
                         "assistant",
-
                         final_answer
-
                     )
 
 
@@ -1482,23 +1459,17 @@ def chat(
 
 
             tool_context = list(
-
                 conversation_history
-
             )
 
 
             tool_context.extend(
-
                 model_output_items
-
             )
 
 
             for tool_call in (
-
                 tool_calls.values()
-
             ):
 
 
@@ -1515,31 +1486,15 @@ def chat(
                     continue
 
 
-                arguments = (
-                    json.loads(
-
-                        tool_call.arguments
-
-                    )
+                arguments = json.loads(
+                    tool_call.arguments
                 )
 
 
-                result = (
-                    calculate(
-
-                        arguments[
-                            "operation"
-                        ],
-
-                        arguments[
-                            "a"
-                        ],
-
-                        arguments[
-                            "b"
-                        ]
-
-                    )
+                result = calculate(
+                    arguments["operation"],
+                    arguments["a"],
+                    arguments["b"]
                 )
 
 
@@ -1621,13 +1576,9 @@ def chat(
 
 
                 save_message(
-
                     conversation_id,
-
                     "assistant",
-
                     final_answer
-
                 )
 
 
@@ -1635,11 +1586,8 @@ def chat(
 
 
             print(
-
                 "\nChat Error:",
-
                 error
-
             )
 
 
@@ -1663,14 +1611,12 @@ def chat(
 
 
 # --------------------------------
-# 24. Structured Chat Endpoint
+# 29. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
 def structured_chat(
-
     request: ChatRequest
-
 ):
 
     conversation_id = (
@@ -1680,9 +1626,7 @@ def structured_chat(
 
     conversation_history = (
         get_conversation_history(
-
             conversation_id
-
         )
     )
 
@@ -1746,21 +1690,20 @@ def structured_chat(
             status_code=500,
 
             detail=(
+
                 "The AI did not return "
+
                 "structured output."
+
             )
 
         )
 
 
     save_message(
-
         conversation_id,
-
         "user",
-
         request.message
-
     )
 
 
@@ -1771,22 +1714,16 @@ def structured_chat(
         + "\n\nKey points:\n"
 
         + "\n".join(
-
             structured_answer.key_points
-
         )
 
     )
 
 
     save_message(
-
         conversation_id,
-
         "assistant",
-
         assistant_text
-
     )
 
 
@@ -1796,24 +1733,18 @@ def structured_chat(
 
 
 # --------------------------------
-# 25. Semantic Search Endpoint
+# 30. Semantic Search Endpoint
 # --------------------------------
 
 @app.post("/embeddings/search")
 def embedding_search(
-
-    request:
-        EmbeddingSearchRequest
-
+    request: EmbeddingSearchRequest
 ):
 
     matches = (
         retrieve_documents(
-
             request.query,
-
             n_results=3
-
         )
     )
 
@@ -1850,23 +1781,18 @@ def embedding_search(
 
 
 # --------------------------------
-# 26. RAG Endpoint
+# 31. RAG Endpoint
 # --------------------------------
 
 @app.post("/rag")
 def rag_chat(
-
     request: RAGRequest
-
 ):
 
     retrieved_documents = (
         retrieve_documents(
-
             request.query,
-
             n_results=3
-
         )
     )
 
@@ -1912,9 +1838,7 @@ def rag_chat(
 
     context = (
         "\n\n".join(
-
             context_parts
-
         )
     )
 
@@ -1963,14 +1887,12 @@ def rag_chat(
 
 
 # --------------------------------
-# 27. Manual Agent Endpoint
+# 32. Manual Agent Endpoint
 # --------------------------------
 
 @app.post("/agent")
 def agent_chat(
-
     request: AgentRequest
-
 ):
 
     conversation_id = (
@@ -1980,17 +1902,13 @@ def agent_chat(
 
     conversation_history = (
         get_conversation_history(
-
             conversation_id
-
         )
     )
 
 
     agent_input = list(
-
         conversation_history
-
     )
 
 
@@ -2006,13 +1924,9 @@ def agent_chat(
 
 
     save_message(
-
         conversation_id,
-
         "user",
-
         request.message
-
     )
 
 
@@ -2029,9 +1943,7 @@ def agent_chat(
 
 
         print(
-
             f"\nAgent Step: {step}"
-
         )
 
 
@@ -2058,9 +1970,7 @@ def agent_chat(
 
 
         agent_input.extend(
-
             response.output
-
         )
 
 
@@ -2087,13 +1997,9 @@ def agent_chat(
 
 
                 save_message(
-
                     conversation_id,
-
                     "assistant",
-
                     final_answer
-
                 )
 
 
@@ -2116,28 +2022,20 @@ def agent_chat(
 
             tool_result = (
                 execute_agent_tool(
-
                     tool_call
-
                 )
             )
 
 
             print(
-
                 "Agent requested tool:",
-
                 tool_call.name
-
             )
 
 
             print(
-
                 "Tool result:",
-
                 tool_result
-
             )
 
 
@@ -2165,9 +2063,7 @@ def agent_chat(
 
                 "output":
                     json.dumps(
-
                         tool_result
-
                     )
 
             })
@@ -2189,14 +2085,12 @@ def agent_chat(
 
 
 # --------------------------------
-# 28. LangChain Agent Endpoint
+# 33. LangChain Agent Endpoint
 # --------------------------------
 
 @app.post("/langchain/agent")
 def langchain_agent_chat(
-
     request: AgentRequest
-
 ):
 
     conversation_id = (
@@ -2206,17 +2100,13 @@ def langchain_agent_chat(
 
     conversation_history = (
         get_conversation_history(
-
             conversation_id
-
         )
     )
 
 
     messages = list(
-
         conversation_history
-
     )
 
 
@@ -2232,13 +2122,9 @@ def langchain_agent_chat(
 
 
     save_message(
-
         conversation_id,
-
         "user",
-
         request.message
-
     )
 
 
@@ -2262,10 +2148,8 @@ def langchain_agent_chat(
 
 
         final_answer = (
-            extract_langchain_text(
-
+            extract_ai_text(
                 final_message
-
             )
         )
 
@@ -2275,19 +2159,17 @@ def langchain_agent_chat(
 
             raise ValueError(
 
-                "LangChain returned an empty final answer."
+                "LangChain returned "
+
+                "an empty final answer."
 
             )
 
 
         save_message(
-
             conversation_id,
-
             "assistant",
-
             final_answer
-
         )
 
 
@@ -2298,11 +2180,9 @@ def langchain_agent_chat(
 
             "message_count":
                 len(
-
                     result[
                         "messages"
                     ]
-
                 )
 
         }
@@ -2312,11 +2192,8 @@ def langchain_agent_chat(
 
 
         print(
-
             "\nLangChain Agent Error:",
-
             error
-
         )
 
 
@@ -2336,21 +2213,156 @@ def langchain_agent_chat(
 
 
 # --------------------------------
-# 29. Clear Conversation
+# 34. LangGraph Agent Endpoint
+# --------------------------------
+
+@app.post("/langgraph/agent")
+def langgraph_agent_chat(
+    request: AgentRequest
+):
+
+    conversation_id = (
+        request.conversation_id
+    )
+
+
+    conversation_history = (
+        get_conversation_history(
+            conversation_id
+        )
+    )
+
+
+    messages = list(
+        conversation_history
+    )
+
+
+    messages.append({
+
+        "role":
+            "user",
+
+        "content":
+            request.message
+
+    })
+
+
+    save_message(
+        conversation_id,
+        "user",
+        request.message
+    )
+
+
+    try:
+
+        result = (
+            langgraph_agent.invoke(
+
+                {
+
+                    "messages":
+                        messages
+
+                },
+
+                config={
+
+                    "recursion_limit":
+                        12
+
+                }
+
+            )
+        )
+
+
+        final_message = (
+            result[
+                "messages"
+            ][-1]
+        )
+
+
+        final_answer = (
+            extract_ai_text(
+                final_message
+            )
+        )
+
+
+        if not final_answer.strip():
+
+
+            raise ValueError(
+
+                "LangGraph returned "
+
+                "an empty final answer."
+
+            )
+
+
+        save_message(
+            conversation_id,
+            "assistant",
+            final_answer
+        )
+
+
+        return {
+
+            "answer":
+                final_answer,
+
+            "message_count":
+                len(
+                    result[
+                        "messages"
+                    ]
+                )
+
+        }
+
+
+    except Exception as error:
+
+
+        print(
+            "\nLangGraph Agent Error:",
+            error
+        )
+
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=(
+
+                "The LangGraph agent failed "
+
+                "to complete the request."
+
+            )
+
+        ) from error
+
+
+# --------------------------------
+# 35. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")
 def clear_chat(
-
     request: ClearRequest
-
 ):
 
     connection = (
         sqlite3.connect(
-
             DATABASE_NAME
-
         )
     )
 

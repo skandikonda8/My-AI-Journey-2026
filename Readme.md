@@ -1956,21 +1956,742 @@ Keeping both makes it easier to understand exactly what LangChain is doing for t
 
 ## Milestone 17 — LangGraph
 
-Next: build the agent workflow using LangGraph and learn:
+Added LangGraph to the project and rebuilt the agent workflow as an explicit stateful graph.
 
-- State
+This milestone focuses on understanding how agent execution can be represented using state, nodes, edges, conditional routing, and tool nodes.
+
+### Why LangGraph?
+
+The project now contains three different agent implementations.
+
+```text
+Milestone 15
+Manual Agent
+↓
+Python controls the loop
+
+
+Milestone 16
+LangChain Agent
+↓
+create_agent() manages the loop
+
+
+Milestone 17
+LangGraph
+↓
+State + Nodes + Edges + Conditions
+control the workflow
+```
+
+LangGraph provides more explicit control over how the agent moves between different steps.
+
+### Package Added
+
+```bash
+pip install -U langgraph
+```
+
+### New Imports
+
+```python
+from langgraph.graph import (
+    StateGraph,
+    START,
+    END,
+    MessagesState
+)
+
+from langgraph.prebuilt import (
+    ToolNode,
+    tools_condition
+)
+```
+
+### Core LangGraph Concepts
+
+This milestone introduces:
+
+```text
+State
+Nodes
+Edges
+Conditional Edges
+Tool Nodes
+Graph Compilation
+Graph Execution
+```
+
+### State
+
+State stores information that moves through the graph.
+
+For this agent, the main state is:
+
+```text
+messages
+```
+
+The graph can contain:
+
+```text
+User Message
++
+AI Message
++
+Tool Call
++
+Tool Result
++
+Final AI Answer
+```
+
+The graph nodes read the current state and return updates to it.
+
+### MessagesState
+
+The graph uses:
+
+```python
+MessagesState
+```
+
+Conceptually:
+
+```text
+State
+└── messages
+```
+
+Example:
+
+```text
+messages
+[
+    User Message,
+    AI Tool Call,
+    Tool Result,
+    AI Final Answer
+]
+```
+
+### LangGraph Tools
+
+The LangChain tools from Milestone 16 are reused.
+
+```python
+LANGGRAPH_TOOLS = [
+    langchain_calculator,
+    langchain_search_knowledge
+]
+```
+
+Available tools:
+
+```text
+calculator
+
+search_knowledge
+```
+
+This demonstrates that existing LangChain tools can also be used inside LangGraph workflows.
+
+### Bind Tools To Model
+
+Created:
+
+```python
+langgraph_model = (
+    langchain_model.bind_tools(
+        LANGGRAPH_TOOLS
+    )
+)
+```
+
+This gives the model access to the tools used by the graph.
+
+### Agent Node
+
+Created:
+
+```python
+def langgraph_agent_node(
+    state: MessagesState
+):
+```
+
+The agent node:
+
+```text
+Receives State
+↓
+Reads state["messages"]
+↓
+Sends Messages To LLM
+↓
+LLM Generates Response
+↓
+Returns New Message
+↓
+Updates Graph State
+```
+
+### Agent Node Flow
+
+```text
+state
+↓
+state["messages"]
+↓
+LangGraph Model
+↓
+AIMessage
+↓
+return {"messages": [response]}
+```
+
+The response may contain:
+
+```text
+Final Text
+```
+
+or:
+
+```text
+Tool Call
+```
+
+### Tool Node
+
+Created:
+
+```python
+langgraph_tool_node = ToolNode(
+    LANGGRAPH_TOOLS
+)
+```
+
+The ToolNode automatically executes tools requested by the model.
+
+Example:
+
+```text
+AI requests:
+
+calculator
+↓
+ToolNode
+↓
+langchain_calculator()
+↓
+Tool Result
+```
+
+or:
+
+```text
+AI requests:
+
+search_knowledge
+↓
+ToolNode
+↓
+ChromaDB Search
+↓
+Tool Result
+```
+
+### Graph Builder
+
+Created:
+
+```python
+langgraph_builder = StateGraph(
+    MessagesState
+)
+```
+
+The builder represents the workflow before it is executable.
+
+### Nodes
+
+Added two nodes:
+
+```text
+agent
+```
+
+and:
+
+```text
+tools
+```
+
+Code:
+
+```python
+langgraph_builder.add_node(
+    "agent",
+    langgraph_agent_node
+)
+
+langgraph_builder.add_node(
+    "tools",
+    langgraph_tool_node
+)
+```
+
+### Starting Edge
+
+The graph begins with:
+
+```text
+START
+↓
+agent
+```
+
+Code:
+
+```python
+langgraph_builder.add_edge(
+    START,
+    "agent"
+)
+```
+
+### Conditional Routing
+
+After the agent node, LangGraph must determine what happens next.
+
+```text
+Agent
+↓
+Did the LLM request a tool?
+```
+
+If yes:
+
+```text
+→ tools
+```
+
+If no:
+
+```text
+→ END
+```
+
+This uses:
+
+```python
+tools_condition
+```
+
+Code:
+
+```python
+langgraph_builder.add_conditional_edges(
+    "agent",
+    tools_condition,
+    {
+        "tools": "tools",
+        "__end__": END
+    }
+)
+```
+
+### Tool Loop
+
+After a tool finishes:
+
+```text
+tools
+↓
+agent
+```
+
+Code:
+
+```python
+langgraph_builder.add_edge(
+    "tools",
+    "agent"
+)
+```
+
+This creates the agent loop.
+
+```text
+Agent
+↓
+Tool
+↓
+Agent
+↓
+Tool
+↓
+Agent
+↓
+Final Answer
+```
+
+### Compile Graph
+
+The graph definition must be compiled before execution.
+
+```python
+langgraph_agent = (
+    langgraph_builder.compile()
+)
+```
+
+Conceptually:
+
+```text
+StateGraph Builder
+↓
+Nodes
+↓
+Edges
+↓
+Conditional Routing
+↓
+compile()
+↓
+Executable Graph
+```
+
+### Complete Graph
+
+```text
+                   START
+                     ↓
+                   AGENT
+                     ↓
+              tools_condition
+                /         \
+              tool         no tool
+               ↓              ↓
+             TOOLS            END
+               ↓
+             AGENT
+               ↓
+        tools_condition
+```
+
+### New Endpoint
+
+Added:
+
+```text
+POST /langgraph/agent
+```
+
+Example request:
+
+```json
+{
+  "conversation_id": "graph-test-1",
+  "message": "Search the knowledge base for embeddings and multiply the number of returned documents by 10."
+}
+```
+
+### LangGraph Execution Flow
+
+```text
+POST /langgraph/agent
+↓
+AgentRequest
+↓
+Load SQLite Conversation History
+↓
+messages
+↓
+langgraph_agent.invoke()
+↓
+START
+↓
+Agent Node
+↓
+LLM
+↓
+Tool Requested?
+↓
+ToolNode
+↓
+Tool Result
+↓
+Agent Node
+↓
+Another Tool?
+↓
+ToolNode
+↓
+Agent Node
+↓
+Final Answer
+↓
+END
+↓
+Save Answer To SQLite
+↓
+Return API Response
+```
+
+### Example Multi-Step Execution
+
+User asks:
+
+```text
+Search the knowledge base for embeddings
+and multiply the number of returned documents by 10.
+```
+
+Possible graph execution:
+
+```text
+START
+↓
+Agent
+↓
+search_knowledge requested
+↓
+Tools
+↓
+ChromaDB
+↓
+3 documents returned
+↓
+Agent
+↓
+calculator requested
+↓
+Tools
+↓
+3 × 10
+↓
+30
+↓
+Agent
+↓
+No additional tool required
+↓
+END
+```
+
+### Manual Loop vs LangGraph Loop
+
+Milestone 15:
+
+```python
+for step in range(...):
+```
+
+The Python loop controls execution.
+
+Milestone 17:
+
+```text
+agent
+↓
+conditional edge
+↓
+tools
+↓
+edge
+↓
+agent
+```
+
+The graph structure controls execution.
+
+### Manual Agent vs LangChain vs LangGraph
+
+```text
+Manual Agent
+
+User
+↓
+OpenAI
+↓
+Python Agent Loop
+↓
+Tool Router
+↓
+Tool
+↓
+Python Loop
+```
+
+```text
+LangChain Agent
+
+User
+↓
+create_agent()
+↓
+LangChain manages agent loop
+↓
+Tools
+↓
+Final Answer
+```
+
+```text
+LangGraph Agent
+
+User
+↓
+StateGraph
+↓
+Agent Node
+↓
+Conditional Edge
+↓
+Tool Node
+↓
+Agent Node
+↓
+END
+```
+
+### Why Use LangGraph?
+
+LangGraph provides explicit workflow control.
+
+Instead of only:
+
+```text
+LLM
+↔
+Tools
+```
+
+future workflows can contain:
+
+```text
+START
+↓
+Classifier
+↓
+Retriever
+↓
+Agent
+↓
+Validator
+↓
+Human Approval
+↓
+External Tool
+↓
+Final Response
+↓
+END
+```
+
+This becomes useful for more complex Agentic AI systems.
+
+### Current Agent Architecture
+
+```text
+                           FastAPI
+                              ↓
+             ┌────────────────┼─────────────────┐
+             ↓                ↓                 ↓
+          /agent      /langchain/agent   /langgraph/agent
+             ↓                ↓                 ↓
+       Manual Agent     LangChain Agent      StateGraph
+             ↓                ↓                 ↓
+        Python Loop       create_agent      Agent Node
+                                                ↓
+                                         Conditional Edge
+                                           /          \
+                                          ↓            ↓
+                                      Tool Node        END
+                                          ↓
+                                      Agent Node
+```
+
+### Important Variables
+
+`LANGGRAPH_TOOLS`
+
+Stores the tools available to the graph.
+
+`langgraph_model`
+
+Stores the model with tools bound to it.
+
+`state`
+
+Stores the shared graph state.
+
+`state["messages"]`
+
+Stores the messages currently available to the workflow.
+
+`langgraph_agent_node`
+
+Node responsible for calling the LLM.
+
+`langgraph_tool_node`
+
+Node responsible for executing tools.
+
+`langgraph_builder`
+
+Stores the graph definition.
+
+`langgraph_agent`
+
+Stores the compiled executable graph.
+
+`result`
+
+Stores the final graph state.
+
+`result["messages"]`
+
+Stores the complete message history produced during graph execution.
+
+### Learned
+
+- LangGraph
+- `StateGraph`
+- `MessagesState`
+- Graph state
 - Nodes
 - Edges
-- Conditional routing
-- Tool nodes
+- Conditional edges
+- `START`
+- `END`
+- `ToolNode`
+- `tools_condition`
+- Tool binding
+- Graph compilation
 - Graph execution
 - Stateful workflows
+- Agent routing
+- Graph-based agent loops
+- Manual loops vs graph loops
+- LangChain vs LangGraph
+- Explicit AI workflow orchestration
 
 ---
 
-## Milestone 17 — LangGraph
+## Milestone 18 — MCP
 
-Build stateful agent workflows and multi-step execution graphs.
+Next: learn the Model Context Protocol and understand how AI applications can connect to external systems through:
+
+- MCP Servers
+- MCP Clients
+- MCP Tools
+- Resources
+- Prompts
+- Tool discovery
+- External service integration
 
 ---
 
