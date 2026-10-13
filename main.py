@@ -73,7 +73,7 @@ vector_collection = (
 
 
 # --------------------------------
-# 6. System Prompt
+# 6. System Prompts
 # --------------------------------
 
 SYSTEM_PROMPT = """
@@ -111,6 +111,23 @@ Use conversation history when relevant.
 Do not invent information.
 If you are uncertain, say so clearly.
 Answer the user's actual question without unnecessary information.
+"""
+
+
+RAG_SYSTEM_PROMPT = """
+You are a helpful AI assistant.
+
+Answer the user's question using only the provided context.
+
+Use the retrieved context as the source of information for your answer.
+
+Do not invent information that is not supported by the provided context.
+
+If the retrieved context does not contain enough information to answer
+the question, say that the available context does not contain enough
+information.
+
+Keep the answer clear and beginner-friendly.
 """
 
 
@@ -163,6 +180,11 @@ class ChatRequest(BaseModel):
 
 
 class EmbeddingSearchRequest(BaseModel):
+
+    query: str
+
+
+class RAGRequest(BaseModel):
 
     query: str
 
@@ -547,16 +569,22 @@ def create_embedding(
 
 ):
 
-    response = client.embeddings.create(
+    embedding_response = (
+        client.embeddings.create(
 
-        model=EMBEDDING_MODEL,
+            model=EMBEDDING_MODEL,
 
-        input=text
+            input=text
 
+        )
     )
 
 
-    return response.data[0].embedding
+    return (
+        embedding_response
+        .data[0]
+        .embedding
+    )
 
 
 # --------------------------------
@@ -588,26 +616,25 @@ def initialize_vector_database():
     )
 
 
-    response = client.embeddings.create(
+    embedding_response = (
+        client.embeddings.create(
 
-        model=EMBEDDING_MODEL,
+            model=EMBEDDING_MODEL,
 
-        input=SAMPLE_DOCUMENTS
+            input=SAMPLE_DOCUMENTS
 
+        )
     )
 
 
     document_embeddings = []
 
 
-    for item in response.data:
-
-        embedding = item.embedding
-
+    for item in embedding_response.data:
 
         document_embeddings.append(
 
-            embedding
+            item.embedding
 
         )
 
@@ -634,7 +661,150 @@ initialize_vector_database()
 
 
 # --------------------------------
-# 16. Serve Frontend
+# 16. Retrieve Documents From Chroma
+# --------------------------------
+
+def retrieve_documents(
+
+    query_text: str,
+
+    n_results: int = 3
+
+):
+
+    total_documents = (
+        vector_collection.count()
+    )
+
+
+    if total_documents == 0:
+
+        return []
+
+
+    actual_n_results = min(
+
+        n_results,
+
+        total_documents
+
+    )
+
+
+    query_embedding = (
+        create_embedding(
+            query_text
+        )
+    )
+
+
+    search_results = (
+        vector_collection.query(
+
+            query_embeddings=[
+
+                query_embedding
+
+            ],
+
+            n_results=actual_n_results,
+
+            include=[
+
+                "documents",
+
+                "metadatas",
+
+                "distances"
+
+            ]
+
+        )
+    )
+
+
+    document_ids = (
+        search_results[
+            "ids"
+        ][0]
+    )
+
+
+    documents = (
+        search_results[
+            "documents"
+        ][0]
+    )
+
+
+    metadatas = (
+        search_results[
+            "metadatas"
+        ][0]
+    )
+
+
+    distances = (
+        search_results[
+            "distances"
+        ][0]
+    )
+
+
+    retrieved_documents = []
+
+
+    for index in range(
+
+        len(documents)
+
+    ):
+
+        distance = (
+            distances[index]
+        )
+
+
+        similarity = (
+            1 - distance
+        )
+
+
+        retrieved_document = {
+
+            "id":
+                document_ids[index],
+
+            "document":
+                documents[index],
+
+            "metadata":
+                metadatas[index],
+
+            "similarity":
+                round(
+
+                    similarity,
+
+                    4
+
+                )
+
+        }
+
+
+        retrieved_documents.append(
+
+            retrieved_document
+
+        )
+
+
+    return retrieved_documents
+
+
+# --------------------------------
+# 17. Serve Frontend
 # --------------------------------
 
 @app.get("/")
@@ -646,7 +816,7 @@ def home():
 
 
 # --------------------------------
-# 17. Main Chat Endpoint
+# 18. Main Chat Endpoint
 #
 # Normal Chat + Streaming
 # + Automatic Tool Calling
@@ -697,35 +867,26 @@ def chat(
         "\n--------------------------------"
     )
 
-
     print(
         "Conversation ID:"
     )
-
 
     print(
         conversation_id
     )
 
-
     print(
         "\nUser Message:"
     )
-
 
     print(
         request.message
     )
 
-
     print(
         "--------------------------------"
     )
 
-
-    # --------------------------------
-    # Streaming generator
-    # --------------------------------
 
     def generate_response():
 
@@ -738,108 +899,106 @@ def chat(
 
         try:
 
-            # --------------------------------
-            # FIRST LLM CALL
-            #
-            # Model decides:
-            #
-            # 1. Answer normally
-            #
-            # OR
-            #
-            # 2. Request a tool
-            # --------------------------------
+            stream = (
+                client.responses.create(
 
-            stream = client.responses.create(
+                    model="gpt-6-luna",
 
-                model="gpt-6-luna",
+                    instructions=SYSTEM_PROMPT,
 
-                instructions=SYSTEM_PROMPT,
+                    input=conversation_history,
 
-                input=conversation_history,
+                    tools=TOOLS,
 
-                tools=TOOLS,
+                    tool_choice="auto",
 
-                tool_choice="auto",
+                    stream=True
 
-                stream=True
-
+                )
             )
 
-
-            # --------------------------------
-            # Process first stream
-            # --------------------------------
 
             for event in stream:
 
 
-                # --------------------------------
-                # Normal text response
-                # --------------------------------
-
                 if (
+
                     event.type
+
                     == "response.output_text.delta"
+
                 ):
 
-                    chunk = event.delta
+                    chunk = (
+                        event.delta
+                    )
 
 
-                    final_answer += chunk
+                    final_answer += (
+                        chunk
+                    )
 
 
                     yield chunk
 
 
-                # --------------------------------
-                # Tool call started
-                # --------------------------------
-
                 elif (
+
                     event.type
+
                     == "response.output_item.added"
+
                 ):
 
+
                     if (
+
                         event.item.type
+
                         == "function_call"
+
                     ):
 
                         tool_calls[
+
                             event.output_index
+
                         ] = event.item
 
 
-                # --------------------------------
-                # Tool call / output item finished
-                # --------------------------------
-
                 elif (
+
                     event.type
+
                     == "response.output_item.done"
+
                 ):
 
+
                     model_output_items.append(
+
                         event.item
+
                     )
 
 
                     if (
+
                         event.item.type
+
                         == "function_call"
+
                     ):
 
                         tool_calls[
+
                             event.output_index
+
                         ] = event.item
 
 
-            # --------------------------------
-            # NO TOOL WAS USED
-            # --------------------------------
-
             if not tool_calls:
+
 
                 if final_answer.strip():
 
@@ -872,55 +1031,65 @@ def chat(
                 return
 
 
-            # --------------------------------
-            # TOOL WAS REQUESTED
-            # --------------------------------
-
             print(
                 "\nTool requested by LLM."
             )
 
 
             tool_context = list(
+
                 conversation_history
+
             )
 
 
             tool_context.extend(
+
                 model_output_items
+
             )
 
 
-            # --------------------------------
-            # Execute requested tools
-            # --------------------------------
-
             for tool_call in (
+
                 tool_calls.values()
+
             ):
 
 
                 if (
+
                     tool_call.name
+
                     == "calculator"
+
                 ):
 
 
-                    arguments = json.loads(
+                    arguments = (
+                        json.loads(
 
-                        tool_call.arguments
+                            tool_call.arguments
 
+                        )
                     )
 
 
                     operation = (
-                        arguments["operation"]
+                        arguments[
+                            "operation"
+                        ]
                     )
 
 
-                    a = arguments["a"]
+                    a = (
+                        arguments["a"]
+                    )
 
-                    b = arguments["b"]
+
+                    b = (
+                        arguments["b"]
+                    )
 
 
                     print(
@@ -946,18 +1115,16 @@ def chat(
                     )
 
 
-                    # --------------------------------
-                    # Real Python execution
-                    # --------------------------------
+                    result = (
+                        calculate(
 
-                    result = calculate(
+                            operation,
 
-                        operation,
+                            a,
 
-                        a,
+                            b
 
-                        b
-
+                        )
                     )
 
 
@@ -970,10 +1137,6 @@ def chat(
                     )
 
 
-                    # --------------------------------
-                    # Send tool result back
-                    # --------------------------------
-
                     tool_context.append({
 
                         "type":
@@ -985,19 +1148,13 @@ def chat(
                         "output":
                             json.dumps({
 
-                                "result": result
+                                "result":
+                                    result
 
                             })
 
                     })
 
-
-            # --------------------------------
-            # SECOND LLM CALL
-            #
-            # Model sees tool result and
-            # produces the final answer
-            # --------------------------------
 
             final_stream = (
                 client.responses.create(
@@ -1021,30 +1178,29 @@ def chat(
             final_answer = ""
 
 
-            # --------------------------------
-            # Stream final answer
-            # --------------------------------
-
             for event in final_stream:
 
 
                 if (
+
                     event.type
+
                     == "response.output_text.delta"
+
                 ):
 
-                    chunk = event.delta
+                    chunk = (
+                        event.delta
+                    )
 
 
-                    final_answer += chunk
+                    final_answer += (
+                        chunk
+                    )
 
 
                     yield chunk
 
-
-            # --------------------------------
-            # Save complete AI response
-            # --------------------------------
 
             if final_answer.strip():
 
@@ -1071,6 +1227,7 @@ def chat(
 
         except Exception as error:
 
+
             print(
                 "\nChat Error:"
             )
@@ -1090,10 +1247,6 @@ def chat(
             )
 
 
-    # --------------------------------
-    # Send streaming response
-    # --------------------------------
-
     return StreamingResponse(
 
         generate_response(),
@@ -1104,7 +1257,7 @@ def chat(
 
 
 # --------------------------------
-# 18. Structured Chat Endpoint
+# 19. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
@@ -1137,38 +1290,42 @@ def structured_chat(
     })
 
 
-    response = client.responses.parse(
+    structured_response = (
+        client.responses.parse(
 
-        model="gpt-6-luna",
+            model="gpt-6-luna",
 
-        instructions="""
+            instructions="""
 
-        You are a helpful AI tutor.
+            You are a helpful AI tutor.
 
-        Analyze the user's question
-        and answer it clearly.
+            Analyze the user's question
+            and answer it clearly.
 
-        Determine whether the topic
-        is appropriate for a beginner,
-        intermediate, or advanced learner.
+            Determine whether the topic
+            is appropriate for a beginner,
+            intermediate, or advanced learner.
 
-        Provide the main answer and
-        a few important key points.
+            Provide the main answer and
+            a few important key points.
 
-        Keep the answer beginner-friendly
-        whenever possible.
+            Keep the answer beginner-friendly
+            whenever possible.
 
-        """,
+            """,
 
-        input=conversation_history,
+            input=conversation_history,
 
-        text_format=StructuredChatResponse
+            text_format=
+                StructuredChatResponse
 
+        )
     )
 
 
     structured_answer = (
-        response.output_parsed
+        structured_response
+        .output_parsed
     )
 
 
@@ -1208,7 +1365,8 @@ def structured_chat(
 
         + "\n".join(
 
-            structured_answer.key_points
+            structured_answer
+            .key_points
 
         )
 
@@ -1227,158 +1385,51 @@ def structured_chat(
 
 
     return (
-        structured_answer.model_dump()
+        structured_answer
+        .model_dump()
     )
 
 
 # --------------------------------
-# 19. Vector Database Semantic Search
+# 20. Vector Database Semantic Search
 # --------------------------------
 
 @app.post("/embeddings/search")
 def embedding_search(
 
-    request: EmbeddingSearchRequest
+    request:
+        EmbeddingSearchRequest
 
 ):
-
-    # --------------------------------
-    # Get text from request
-    # --------------------------------
 
     query_text = (
         request.query
     )
 
 
-    # --------------------------------
-    # Convert query into embedding
-    # --------------------------------
+    matches = (
+        retrieve_documents(
 
-    query_embedding = (
-        create_embedding(
+            query_text,
 
-            query_text
+            n_results=3
 
         )
     )
 
 
-    # --------------------------------
-    # Search ChromaDB
-    # --------------------------------
+    if not matches:
 
-    search_results = (
-        vector_collection.query(
+        raise HTTPException(
 
-            query_embeddings=[
+            status_code=500,
 
-                query_embedding
-
-            ],
-
-            n_results=3,
-
-            include=[
-
-                "documents",
-
-                "metadatas",
-
-                "distances"
-
-            ]
+            detail=(
+                "The vector database is empty."
+            )
 
         )
-    )
 
-
-    # --------------------------------
-    # Extract results for first query
-    # --------------------------------
-
-    document_ids = (
-        search_results[
-            "ids"
-        ][0]
-    )
-
-
-    documents = (
-        search_results[
-            "documents"
-        ][0]
-    )
-
-
-    metadatas = (
-        search_results[
-            "metadatas"
-        ][0]
-    )
-
-
-    distances = (
-        search_results[
-            "distances"
-        ][0]
-    )
-
-
-    # --------------------------------
-    # Format results
-    # --------------------------------
-
-    matches = []
-
-
-    for index in range(
-
-        len(documents)
-
-    ):
-
-        distance = (
-            distances[index]
-        )
-
-
-        similarity = (
-            1 - distance
-        )
-
-
-        match = {
-
-            "id":
-                document_ids[index],
-
-            "document":
-                documents[index],
-
-            "metadata":
-                metadatas[index],
-
-            "similarity":
-                round(
-
-                    similarity,
-
-                    4
-
-                )
-
-        }
-
-
-        matches.append(
-            match
-        )
-
-
-    # --------------------------------
-    # Return search results
-    # --------------------------------
 
     return {
 
@@ -1398,7 +1449,163 @@ def embedding_search(
 
 
 # --------------------------------
-# 20. Clear Conversation
+# 21. RAG Endpoint
+# --------------------------------
+
+@app.post("/rag")
+def rag_chat(
+
+    request: RAGRequest
+
+):
+
+    # --------------------------------
+    # Get user question
+    # --------------------------------
+
+    query_text = (
+        request.query
+    )
+
+
+    # --------------------------------
+    # Retrieve relevant documents
+    # --------------------------------
+
+    retrieved_documents = (
+        retrieve_documents(
+
+            query_text,
+
+            n_results=3
+
+        )
+    )
+
+
+    if not retrieved_documents:
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=(
+
+                "No documents were available "
+
+                "for retrieval."
+
+            )
+
+        )
+
+
+    # --------------------------------
+    # Build context
+    # --------------------------------
+
+    context_parts = []
+
+
+    for index, item in enumerate(
+
+        retrieved_documents,
+
+        start=1
+
+    ):
+
+
+        context_part = (
+
+            f"Document {index}:\n"
+
+            f"{item['document']}"
+
+        )
+
+
+        context_parts.append(
+
+            context_part
+
+        )
+
+
+    context = (
+        "\n\n".join(
+
+            context_parts
+
+        )
+    )
+
+
+    # --------------------------------
+    # Build final RAG input
+    # --------------------------------
+
+    rag_input = (
+
+        "CONTEXT:\n"
+
+        f"{context}\n\n"
+
+        "USER QUESTION:\n"
+
+        f"{query_text}"
+
+    )
+
+
+    # --------------------------------
+    # Send context + question to LLM
+    # --------------------------------
+
+    llm_response = (
+        client.responses.create(
+
+            model="gpt-6-luna",
+
+            instructions=
+                RAG_SYSTEM_PROMPT,
+
+            input=
+                rag_input
+
+        )
+    )
+
+
+    # --------------------------------
+    # Extract final answer
+    # --------------------------------
+
+    answer = (
+        llm_response.output_text
+    )
+
+
+    # --------------------------------
+    # Return RAG response
+    # --------------------------------
+
+    return {
+
+        "query":
+            query_text,
+
+        "answer":
+            answer,
+
+        "retrieved_documents":
+            retrieved_documents
+
+    }
+
+
+# --------------------------------
+# 22. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")
@@ -1408,14 +1615,18 @@ def clear_chat(
 
 ):
 
-    connection = sqlite3.connect(
+    connection = (
+        sqlite3.connect(
 
-        DATABASE_NAME
+            DATABASE_NAME
 
+        )
     )
 
 
-    cursor = connection.cursor()
+    cursor = (
+        connection.cursor()
+    )
 
 
     cursor.execute(
