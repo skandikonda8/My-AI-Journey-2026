@@ -5,37 +5,27 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Literal
 
-import sqlite3
+import chromadb
 import json
 import os
-import chromadb
+import sqlite3
 
 
 # --------------------------------
-# 1. Load environment variables
+# 1. Environment + Clients
 # --------------------------------
 
 load_dotenv()
-
-
-# --------------------------------
-# 2. Create OpenAI client
-# --------------------------------
 
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-
-# --------------------------------
-# 3. Create FastAPI application
-# --------------------------------
-
 app = FastAPI()
 
 
 # --------------------------------
-# 4. Configuration
+# 2. Configuration
 # --------------------------------
 
 DATABASE_NAME = "chatbot.db"
@@ -46,23 +36,21 @@ CHROMA_PATH = "./chroma_db"
 
 CHROMA_COLLECTION_NAME = "ai_journey_documents"
 
+MAX_AGENT_STEPS = 5
+
 
 # --------------------------------
-# 5. Chroma Vector Database
+# 3. Chroma Vector Database
 # --------------------------------
 
 chroma_client = chromadb.PersistentClient(
     path=CHROMA_PATH
 )
 
-
 vector_collection = (
     chroma_client.get_or_create_collection(
-
         name=CHROMA_COLLECTION_NAME,
-
         embedding_function=None,
-
         configuration={
             "hnsw": {
                 "space": "cosine"
@@ -73,7 +61,7 @@ vector_collection = (
 
 
 # --------------------------------
-# 6. System Prompts
+# 4. System Prompts
 # --------------------------------
 
 SYSTEM_PROMPT = """
@@ -131,8 +119,42 @@ Keep the answer clear and beginner-friendly.
 """
 
 
+AGENT_SYSTEM_PROMPT = """
+You are a tool-using AI agent.
+
+Your job is to solve the user's request by deciding which available
+tools are needed.
+
+AVAILABLE TOOLS:
+
+1. calculator
+Use this tool whenever arithmetic is required.
+
+2. search_knowledge
+Use this tool when information may exist in the local knowledge base.
+
+RULES:
+
+You may call one tool, multiple tools, or no tools.
+
+You may use tools across multiple steps.
+
+When a tool returns information, examine the result and decide whether
+another tool is needed.
+
+For arithmetic, always use the calculator tool.
+
+For questions about the local knowledge base, use search_knowledge
+instead of relying only on your own memory.
+
+When you have enough information, answer the user clearly and concisely.
+
+Do not invent tool results.
+"""
+
+
 # --------------------------------
-# 7. Initialize SQLite Database
+# 5. Initialize SQLite Database
 # --------------------------------
 
 def initialize_database():
@@ -143,8 +165,8 @@ def initialize_database():
 
     cursor = connection.cursor()
 
-
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS messages (
 
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,8 +179,8 @@ def initialize_database():
 
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-
+        """
+    )
 
     connection.commit()
 
@@ -169,7 +191,7 @@ initialize_database()
 
 
 # --------------------------------
-# 8. Request / Response Models
+# 6. Request / Response Models
 # --------------------------------
 
 class ChatRequest(BaseModel):
@@ -187,6 +209,13 @@ class EmbeddingSearchRequest(BaseModel):
 class RAGRequest(BaseModel):
 
     query: str
+
+
+class AgentRequest(BaseModel):
+
+    conversation_id: str
+
+    message: str
 
 
 class ClearRequest(BaseModel):
@@ -210,7 +239,7 @@ class StructuredChatResponse(BaseModel):
 
 
 # --------------------------------
-# 9. Save Message
+# 7. Save Message
 # --------------------------------
 
 def save_message(
@@ -228,7 +257,6 @@ def save_message(
     )
 
     cursor = connection.cursor()
-
 
     cursor.execute(
 
@@ -254,14 +282,13 @@ def save_message(
         )
     )
 
-
     connection.commit()
 
     connection.close()
 
 
 # --------------------------------
-# 10. Get Conversation History
+# 8. Get Conversation History
 # --------------------------------
 
 def get_conversation_history(
@@ -275,7 +302,6 @@ def get_conversation_history(
     )
 
     cursor = connection.cursor()
-
 
     cursor.execute(
 
@@ -294,15 +320,11 @@ def get_conversation_history(
         )
     )
 
-
     rows = cursor.fetchall()
-
 
     connection.close()
 
-
     conversation_history = []
-
 
     for row in rows:
 
@@ -314,12 +336,11 @@ def get_conversation_history(
 
         })
 
-
     return conversation_history
 
 
 # --------------------------------
-# 11. Calculator Python Function
+# 9. Calculator Python Function
 # --------------------------------
 
 def calculate(
@@ -337,22 +358,21 @@ def calculate(
         return a + b
 
 
-    elif operation == "subtract":
+    if operation == "subtract":
 
         return a - b
 
 
-    elif operation == "multiply":
+    if operation == "multiply":
 
         return a * b
 
 
-    elif operation == "divide":
+    if operation == "divide":
 
         if b == 0:
 
             return "Cannot divide by zero."
-
 
         return a / b
 
@@ -361,95 +381,91 @@ def calculate(
 
 
 # --------------------------------
-# 12. Tool Definition
+# 10. Calculator Tool Definition
 # --------------------------------
 
-TOOLS = [
+CALCULATOR_TOOL = {
 
-    {
+    "type": "function",
 
-        "type": "function",
+    "name": "calculator",
 
-        "name": "calculator",
+    "description": (
 
-        "description": (
+        "Perform basic arithmetic calculations. "
 
-            "Perform basic arithmetic calculations. "
+        "Use this tool for addition, subtraction, "
 
-            "Use this tool for addition, subtraction, "
+        "multiplication, and division."
 
-            "multiplication, and division."
+    ),
 
-        ),
+    "parameters": {
 
+        "type": "object",
 
-        "parameters": {
+        "properties": {
 
-            "type": "object",
+            "operation": {
 
+                "type": "string",
 
-            "properties": {
+                "enum": [
 
-                "operation": {
+                    "add",
 
-                    "type": "string",
+                    "subtract",
 
-                    "enum": [
+                    "multiply",
 
-                        "add",
+                    "divide"
 
-                        "subtract",
-
-                        "multiply",
-
-                        "divide"
-
-                    ]
-
-                },
-
-
-                "a": {
-
-                    "type": "number"
-
-                },
-
-
-                "b": {
-
-                    "type": "number"
-
-                }
+                ]
 
             },
 
+            "a": {
 
-            "required": [
+                "type": "number"
 
-                "operation",
+            },
 
-                "a",
+            "b": {
 
-                "b"
+                "type": "number"
 
-            ],
-
-
-            "additionalProperties": False
+            }
 
         },
 
+        "required": [
 
-        "strict": True
+            "operation",
 
-    }
+            "a",
+
+            "b"
+
+        ],
+
+        "additionalProperties": False
+
+    },
+
+    "strict": True
+
+}
+
+
+TOOLS = [
+
+    CALCULATOR_TOOL
 
 ]
 
 
 # --------------------------------
-# 13. Sample Documents
+# 11. Sample Documents
 # --------------------------------
 
 SAMPLE_DOCUMENTS = [
@@ -462,13 +478,11 @@ SAMPLE_DOCUMENTS = [
         "a parent class."
     ),
 
-
     (
         "FastAPI is a Python web framework "
 
         "used to build APIs and backend services."
     ),
-
 
     (
         "SQLite is a lightweight relational "
@@ -476,13 +490,11 @@ SAMPLE_DOCUMENTS = [
         "database that stores data in a local file."
     ),
 
-
     (
         "Embeddings convert text into numerical "
 
         "vectors that represent semantic meaning."
     ),
-
 
     (
         "Retrieval Augmented Generation retrieves "
@@ -520,7 +532,6 @@ SAMPLE_DOCUMENT_METADATA = [
 
     },
 
-
     {
 
         "topic": "fastapi",
@@ -528,7 +539,6 @@ SAMPLE_DOCUMENT_METADATA = [
         "category": "backend"
 
     },
-
 
     {
 
@@ -538,7 +548,6 @@ SAMPLE_DOCUMENT_METADATA = [
 
     },
 
-
     {
 
         "topic": "embeddings",
@@ -546,7 +555,6 @@ SAMPLE_DOCUMENT_METADATA = [
         "category": "ai"
 
     },
-
 
     {
 
@@ -560,7 +568,7 @@ SAMPLE_DOCUMENT_METADATA = [
 
 
 # --------------------------------
-# 14. Create Embedding
+# 12. Create Embedding
 # --------------------------------
 
 def create_embedding(
@@ -579,7 +587,6 @@ def create_embedding(
         )
     )
 
-
     return (
         embedding_response
         .data[0]
@@ -588,7 +595,7 @@ def create_embedding(
 
 
 # --------------------------------
-# 15. Initialize Vector Database
+# 13. Initialize Vector Database
 # --------------------------------
 
 def initialize_vector_database():
@@ -596,7 +603,6 @@ def initialize_vector_database():
     existing_documents = (
         vector_collection.count()
     )
-
 
     if existing_documents > 0:
 
@@ -661,7 +667,7 @@ initialize_vector_database()
 
 
 # --------------------------------
-# 16. Retrieve Documents From Chroma
+# 14. Retrieve Documents From Chroma
 # --------------------------------
 
 def retrieve_documents(
@@ -693,7 +699,9 @@ def retrieve_documents(
 
     query_embedding = (
         create_embedding(
+
             query_text
+
         )
     )
 
@@ -804,7 +812,181 @@ def retrieve_documents(
 
 
 # --------------------------------
-# 17. Serve Frontend
+# 15. Knowledge Search Python Tool
+# --------------------------------
+
+def search_knowledge(
+
+    query: str
+
+):
+
+    matches = (
+        retrieve_documents(
+
+            query,
+
+            n_results=3
+
+        )
+    )
+
+
+    return {
+
+        "query":
+            query,
+
+        "match_count":
+            len(matches),
+
+        "matches":
+            matches
+
+    }
+
+
+# --------------------------------
+# 16. Knowledge Search Tool Definition
+# --------------------------------
+
+KNOWLEDGE_SEARCH_TOOL = {
+
+    "type": "function",
+
+    "name": "search_knowledge",
+
+    "description": (
+
+        "Search the local knowledge base for "
+
+        "documents relevant to the user's question."
+
+    ),
+
+    "parameters": {
+
+        "type": "object",
+
+        "properties": {
+
+            "query": {
+
+                "type": "string",
+
+                "description": (
+
+                    "The semantic search query."
+
+                )
+
+            }
+
+        },
+
+        "required": [
+
+            "query"
+
+        ],
+
+        "additionalProperties": False
+
+    },
+
+    "strict": True
+
+}
+
+
+AGENT_TOOLS = [
+
+    CALCULATOR_TOOL,
+
+    KNOWLEDGE_SEARCH_TOOL
+
+]
+
+
+# --------------------------------
+# 17. Agent Tool Router
+# --------------------------------
+
+def execute_agent_tool(
+
+    tool_call
+
+):
+
+    try:
+
+        arguments = json.loads(
+
+            tool_call.arguments
+
+        )
+
+
+        if tool_call.name == "calculator":
+
+            result = calculate(
+
+                arguments["operation"],
+
+                arguments["a"],
+
+                arguments["b"]
+
+            )
+
+
+            return {
+
+                "result":
+                    result
+
+            }
+
+
+        if tool_call.name == "search_knowledge":
+
+            return search_knowledge(
+
+                arguments["query"]
+
+            )
+
+
+        return {
+
+            "error":
+                f"Unknown tool: {tool_call.name}"
+
+        }
+
+
+    except (
+
+        json.JSONDecodeError,
+
+        KeyError,
+
+        TypeError,
+
+        ValueError
+
+    ) as error:
+
+        return {
+
+            "error":
+                f"Tool execution failed: {error}"
+
+        }
+
+
+# --------------------------------
+# 18. Serve Frontend
 # --------------------------------
 
 @app.get("/")
@@ -816,10 +998,10 @@ def home():
 
 
 # --------------------------------
-# 18. Main Chat Endpoint
+# 19. Main Chat Endpoint
 #
 # Normal Chat + Streaming
-# + Automatic Tool Calling
+# + Automatic Calculator Tool Calling
 # --------------------------------
 
 @app.post("/chat")
@@ -845,9 +1027,11 @@ def chat(
 
     conversation_history.append({
 
-        "role": "user",
+        "role":
+            "user",
 
-        "content": request.message
+        "content":
+            request.message
 
     })
 
@@ -860,31 +1044,6 @@ def chat(
 
         request.message
 
-    )
-
-
-    print(
-        "\n--------------------------------"
-    )
-
-    print(
-        "Conversation ID:"
-    )
-
-    print(
-        conversation_id
-    )
-
-    print(
-        "\nUser Message:"
-    )
-
-    print(
-        request.message
-    )
-
-    print(
-        "--------------------------------"
     )
 
 
@@ -929,15 +1088,9 @@ def chat(
 
                 ):
 
-                    chunk = (
-                        event.delta
-                    )
+                    chunk = event.delta
 
-
-                    final_answer += (
-                        chunk
-                    )
-
+                    final_answer += chunk
 
                     yield chunk
 
@@ -997,6 +1150,10 @@ def chat(
                         ] = event.item
 
 
+            # --------------------------------
+            # No tool required
+            # --------------------------------
+
             if not tool_calls:
 
 
@@ -1013,28 +1170,12 @@ def chat(
                     )
 
 
-                print(
-                    "\nNo tool required."
-                )
-
-
-                print(
-                    "\nFinal Response:"
-                )
-
-
-                print(
-                    final_answer
-                )
-
-
                 return
 
 
-            print(
-                "\nTool requested by LLM."
-            )
-
+            # --------------------------------
+            # Calculator requested
+            # --------------------------------
 
             tool_context = list(
 
@@ -1066,73 +1207,20 @@ def chat(
                 ):
 
 
-                    arguments = (
-                        json.loads(
+                    arguments = json.loads(
 
-                            tool_call.arguments
+                        tool_call.arguments
 
-                        )
                     )
 
 
-                    operation = (
-                        arguments[
-                            "operation"
-                        ]
-                    )
+                    result = calculate(
 
+                        arguments["operation"],
 
-                    a = (
-                        arguments["a"]
-                    )
+                        arguments["a"],
 
-
-                    b = (
                         arguments["b"]
-                    )
-
-
-                    print(
-                        "\nCalculator requested:"
-                    )
-
-
-                    print(
-                        "Operation:",
-                        operation
-                    )
-
-
-                    print(
-                        "A:",
-                        a
-                    )
-
-
-                    print(
-                        "B:",
-                        b
-                    )
-
-
-                    result = (
-                        calculate(
-
-                            operation,
-
-                            a,
-
-                            b
-
-                        )
-                    )
-
-
-                    print(
-
-                        "Calculator result:",
-
-                        result
 
                     )
 
@@ -1155,6 +1243,10 @@ def chat(
 
                     })
 
+
+            # --------------------------------
+            # Second LLM call
+            # --------------------------------
 
             final_stream = (
                 client.responses.create(
@@ -1189,15 +1281,9 @@ def chat(
 
                 ):
 
-                    chunk = (
-                        event.delta
-                    )
+                    chunk = event.delta
 
-
-                    final_answer += (
-                        chunk
-                    )
-
+                    final_answer += chunk
 
                     yield chunk
 
@@ -1215,26 +1301,14 @@ def chat(
                 )
 
 
-            print(
-                "\nFinal Response:"
-            )
-
-
-            print(
-                final_answer
-            )
-
-
         except Exception as error:
 
-
             print(
-                "\nChat Error:"
-            )
 
+                "\nChat Error:",
 
-            print(
                 error
+
             )
 
 
@@ -1257,7 +1331,7 @@ def chat(
 
 
 # --------------------------------
-# 19. Structured Chat Endpoint
+# 20. Structured Chat Endpoint
 # --------------------------------
 
 @app.post("/chat/structured")
@@ -1283,9 +1357,11 @@ def structured_chat(
 
     conversation_history.append({
 
-        "role": "user",
+        "role":
+            "user",
 
-        "content": request.message
+        "content":
+            request.message
 
     })
 
@@ -1391,7 +1467,7 @@ def structured_chat(
 
 
 # --------------------------------
-# 20. Vector Database Semantic Search
+# 21. Vector Database Semantic Search
 # --------------------------------
 
 @app.post("/embeddings/search")
@@ -1449,7 +1525,7 @@ def embedding_search(
 
 
 # --------------------------------
-# 21. RAG Endpoint
+# 22. RAG Endpoint
 # --------------------------------
 
 @app.post("/rag")
@@ -1459,18 +1535,10 @@ def rag_chat(
 
 ):
 
-    # --------------------------------
-    # Get user question
-    # --------------------------------
-
     query_text = (
         request.query
     )
 
-
-    # --------------------------------
-    # Retrieve relevant documents
-    # --------------------------------
 
     retrieved_documents = (
         retrieve_documents(
@@ -1500,10 +1568,6 @@ def rag_chat(
         )
 
 
-    # --------------------------------
-    # Build context
-    # --------------------------------
-
     context_parts = []
 
 
@@ -1514,7 +1578,6 @@ def rag_chat(
         start=1
 
     ):
-
 
         context_part = (
 
@@ -1541,10 +1604,6 @@ def rag_chat(
     )
 
 
-    # --------------------------------
-    # Build final RAG input
-    # --------------------------------
-
     rag_input = (
 
         "CONTEXT:\n"
@@ -1557,10 +1616,6 @@ def rag_chat(
 
     )
 
-
-    # --------------------------------
-    # Send context + question to LLM
-    # --------------------------------
 
     llm_response = (
         client.responses.create(
@@ -1577,18 +1632,10 @@ def rag_chat(
     )
 
 
-    # --------------------------------
-    # Extract final answer
-    # --------------------------------
-
     answer = (
         llm_response.output_text
     )
 
-
-    # --------------------------------
-    # Return RAG response
-    # --------------------------------
 
     return {
 
@@ -1605,7 +1652,266 @@ def rag_chat(
 
 
 # --------------------------------
-# 22. Clear Conversation
+# 23. Agent Endpoint
+# --------------------------------
+
+@app.post("/agent")
+def agent_chat(
+
+    request: AgentRequest
+
+):
+
+    conversation_id = (
+        request.conversation_id
+    )
+
+
+    # --------------------------------
+    # Load conversation history
+    # --------------------------------
+
+    conversation_history = (
+        get_conversation_history(
+
+            conversation_id
+
+        )
+    )
+
+
+    # --------------------------------
+    # Prepare agent context
+    # --------------------------------
+
+    agent_input = list(
+
+        conversation_history
+
+    )
+
+
+    agent_input.append({
+
+        "role":
+            "user",
+
+        "content":
+            request.message
+
+    })
+
+
+    save_message(
+
+        conversation_id,
+
+        "user",
+
+        request.message
+
+    )
+
+
+    tool_trace = []
+
+
+    # --------------------------------
+    # Agent loop
+    # --------------------------------
+
+    for step in range(
+
+        1,
+
+        MAX_AGENT_STEPS + 1
+
+    ):
+
+
+        print(
+
+            f"\nAgent Step: {step}"
+
+        )
+
+
+        agent_response = (
+            client.responses.create(
+
+                model="gpt-6-luna",
+
+                instructions=
+                    AGENT_SYSTEM_PROMPT,
+
+                input=
+                    agent_input,
+
+                tools=
+                    AGENT_TOOLS,
+
+                tool_choice="auto"
+
+            )
+        )
+
+
+        # --------------------------------
+        # Preserve model output
+        # --------------------------------
+
+        agent_input.extend(
+
+            agent_response.output
+
+        )
+
+
+        # --------------------------------
+        # Find function calls
+        # --------------------------------
+
+        tool_calls = [
+
+            item
+
+            for item in agent_response.output
+
+            if item.type == "function_call"
+
+        ]
+
+
+        # --------------------------------
+        # No tool call = final answer
+        # --------------------------------
+
+        if not tool_calls:
+
+
+            final_answer = (
+                agent_response.output_text
+            )
+
+
+            if final_answer.strip():
+
+                save_message(
+
+                    conversation_id,
+
+                    "assistant",
+
+                    final_answer
+
+                )
+
+
+            return {
+
+                "answer":
+                    final_answer,
+
+                "steps_used":
+                    step,
+
+                "tool_trace":
+                    tool_trace
+
+            }
+
+
+        # --------------------------------
+        # Execute requested tools
+        # --------------------------------
+
+        for tool_call in tool_calls:
+
+
+            print(
+
+                "Agent requested tool:",
+
+                tool_call.name
+
+            )
+
+
+            tool_result = (
+                execute_agent_tool(
+
+                    tool_call
+
+                )
+            )
+
+
+            print(
+
+                "Tool result:",
+
+                tool_result
+
+            )
+
+
+            tool_trace.append({
+
+                "step":
+                    step,
+
+                "tool":
+                    tool_call.name,
+
+                "result":
+                    tool_result
+
+            })
+
+
+            # --------------------------------
+            # Send tool result back to LLM
+            # --------------------------------
+
+            agent_input.append({
+
+                "type":
+                    "function_call_output",
+
+                "call_id":
+                    tool_call.call_id,
+
+                "output":
+                    json.dumps(
+
+                        tool_result
+
+                    )
+
+            })
+
+
+    # --------------------------------
+    # Too many steps
+    # --------------------------------
+
+    raise HTTPException(
+
+        status_code=500,
+
+        detail=(
+
+            "The agent reached the maximum "
+
+            "number of execution steps."
+
+        )
+
+    )
+
+
+# --------------------------------
+# 24. Clear Conversation
 # --------------------------------
 
 @app.post("/clear")
